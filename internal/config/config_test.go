@@ -1,0 +1,118 @@
+package config
+
+import (
+	"context"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func TestLoadStoreAppliesMigrationsIdempotently(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "gateway.db")
+
+	store, err := LoadStore(path)
+	if err != nil {
+		t.Fatalf("load store: %v", err)
+	}
+	store.Close()
+
+	store, err = LoadStore(path)
+	if err != nil {
+		t.Fatalf("reload store: %v", err)
+	}
+	defer store.Close()
+
+	var migrationCount int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
+		t.Fatalf("query migrations: %v", err)
+	}
+	if migrationCount == 0 {
+		t.Fatal("expected at least one applied migration")
+	}
+
+	for _, table := range []string{"servers", "endpoints", "api_keys", "tool_cache", "usage_counters", "rate_limit_buckets"} {
+		var name string
+		if err := store.db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name); err != nil {
+			t.Fatalf("expected table %s: %v", table, err)
+		}
+	}
+}
+
+func TestConsumeRateLimitTokenUsesTokenBucket(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	ctx := context.Background()
+	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	first, err := store.ConsumeRateLimitToken(ctx, "endpoint:dev", 2, now)
+	if err != nil {
+		t.Fatalf("consume first token: %v", err)
+	}
+	if !first.Allowed || first.Remaining != 1 {
+		t.Fatalf("unexpected first decision: %#v", first)
+	}
+
+	second, err := store.ConsumeRateLimitToken(ctx, "endpoint:dev", 2, now)
+	if err != nil {
+		t.Fatalf("consume second token: %v", err)
+	}
+	if !second.Allowed || second.Remaining != 0 {
+		t.Fatalf("unexpected second decision: %#v", second)
+	}
+
+	third, err := store.ConsumeRateLimitToken(ctx, "endpoint:dev", 2, now)
+	if err != nil {
+		t.Fatalf("consume third token: %v", err)
+	}
+	if third.Allowed || third.Remaining != 0 || !third.ResetAt.Equal(now.Add(30*time.Second)) {
+		t.Fatalf("unexpected denied decision: %#v", third)
+	}
+
+	refilled, err := store.ConsumeRateLimitToken(ctx, "endpoint:dev", 2, now.Add(30*time.Second))
+	if err != nil {
+		t.Fatalf("consume refilled token: %v", err)
+	}
+	if !refilled.Allowed || refilled.Remaining != 0 {
+		t.Fatalf("unexpected refilled decision: %#v", refilled)
+	}
+}
+
+func TestConsumeRateLimitTokenSerializesConcurrentCalls(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	ctx := context.Background()
+	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	var allowed atomic.Int64
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			decision, err := store.ConsumeRateLimitToken(ctx, "endpoint:dev", 5, now)
+			if err != nil {
+				t.Errorf("consume token: %v", err)
+				return
+			}
+			if decision.Allowed {
+				allowed.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := allowed.Load(); got != 5 {
+		t.Fatalf("expected exactly 5 allowed calls, got %d", got)
+	}
+}
+
+func newTestStore(t testing.TB) *Store {
+	t.Helper()
+	store, err := LoadStore(filepath.Join(t.TempDir(), "gateway.db"))
+	if err != nil {
+		t.Fatalf("load store: %v", err)
+	}
+	return store
+}

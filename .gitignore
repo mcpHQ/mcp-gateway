@@ -1,0 +1,6 @@
+mcp-gateway.json
+mcp-gateway.db
+mcp-gateway.db-*
+mcp-gateway-debug-bin
+node_modules/
+ui/dist/

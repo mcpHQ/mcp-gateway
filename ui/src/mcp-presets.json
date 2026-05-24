@@ -1,0 +1,83 @@
+[
+  {
+    "id": "custom-http",
+    "labelKey": "preset.customHttp.label",
+    "descriptionKey": "preset.customHttp.description",
+    "serverNameKey": "preset.customHttp.serverName",
+    "server": {
+      "id": "custom-http",
+      "name": "",
+      "transport": "http",
+      "url": "",
+      "auth": {
+        "type": "none"
+      },
+      "headers": {},
+      "command": "",
+      "args": [],
+      "weight": 1,
+      "enabled": true
+    }
+  },
+  {
+    "id": "github-http",
+    "labelKey": "preset.githubHttp.label",
+    "descriptionKey": "preset.githubHttp.description",
+    "serverNameKey": "preset.githubHttp.serverName",
+    "server": {
+      "id": "github",
+      "name": "",
+      "transport": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "auth": {
+        "type": "bearer",
+        "token": "${GITHUB_TOKEN}"
+      },
+      "headers": {},
+      "command": "",
+      "args": [],
+      "weight": 1,
+      "enabled": true
+    }
+  },
+  {
+    "id": "filesystem-stdio",
+    "labelKey": "preset.filesystemStdio.label",
+    "descriptionKey": "preset.filesystemStdio.description",
+    "serverNameKey": "preset.filesystemStdio.serverName",
+    "server": {
+      "id": "filesystem",
+      "name": "",
+      "transport": "stdio",
+      "url": "",
+      "auth": {
+        "type": "none"
+      },
+      "headers": {},
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+      "weight": 1,
+      "enabled": true
+    }
+  },
+  {
+    "id": "memory-stdio",
+    "labelKey": "preset.memoryStdio.label",
+    "descriptionKey": "preset.memoryStdio.description",
+    "serverNameKey": "preset.memoryStdio.serverName",
+    "server": {
+      "id": "memory",
+      "name": "",
+      "transport": "stdio",
+      "url": "",
+      "auth": {
+        "type": "none"
+      },
+      "headers": {},
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "weight": 1,
+      "enabled": true
+    }
+  }
+]

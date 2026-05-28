@@ -1,9 +1,11 @@
 package web
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -49,5 +51,65 @@ func TestGlobalMCPToolCallRequiresEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(payload.Error.Message, "/mcp/{endpointId}") {
 		t.Fatalf("expected endpoint route guidance, got %q", payload.Error.Message)
+	}
+}
+
+func TestGeneratedOpenAPIResponseTypesKeepJSONShape(t *testing.T) {
+	tests := []struct {
+		name string
+		in   any
+		want string
+	}{
+		{
+			name: "config response",
+			in:   ConfigResponse{Path: "mcp-gateway.db"},
+			want: `{"path":"mcp-gateway.db"}`,
+		},
+		{
+			name: "rest error response",
+			in:   ErrorResponse{Error: "server not found"},
+			want: `{"error":"server not found"}`,
+		},
+		{
+			name: "api key list redacts value",
+			in: APIKeysResponse{ApiKeys: []APIKeyStatus{{
+				Id:          "default",
+				Name:        "Default",
+				EndpointIds: []string{"dev-tools"},
+				Enabled:     true,
+				HasValue:    true,
+			}}},
+			want: `{"apiKeys":[{"enabled":true,"endpointIds":["dev-tools"],"hasValue":true,"id":"default","name":"Default"}]}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := json.Marshal(tt.in)
+			if err != nil {
+				t.Fatalf("marshal generated type: %v", err)
+			}
+			if !bytes.Equal(got, []byte(tt.want)) {
+				t.Fatalf("expected %s, got %s", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestOpenAPISpecDocumentsCompatibilityRoutes(t *testing.T) {
+	spec, err := os.ReadFile("../../api/openapi.yaml")
+	if err != nil {
+		t.Fatalf("read OpenAPI spec: %v", err)
+	}
+
+	for _, want := range []string{
+		"/api/tools/{name}/call:",
+		"/mcp/{endpointId}:",
+		"APIKeyStatus:",
+		"hasValue:",
+	} {
+		if !strings.Contains(string(spec), want) {
+			t.Fatalf("expected OpenAPI spec to include %q", want)
+		}
 	}
 }

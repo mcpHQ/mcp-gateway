@@ -1,6 +1,48 @@
+# Local gateway state
 mcp-gateway.json
 mcp-gateway.db
 mcp-gateway.db-*
 mcp-gateway-debug-bin
+
+# Dependencies and frontend build scratch output
 node_modules/
 ui/dist/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs and runtime output
+*.log
+logs/
+tmp/
+temp/
+
+# Go test/build artifacts
+mcp-gateway
+*.test
+*.out
+coverage.out
+coverage.html
+bin/
+dist/
+
+# Node package-manager caches
+.npm/
+.pnpm-store/
+.yarn/
+!.yarn/releases/
+!.yarn/plugins/
+!.yarn/sdks/
+!.yarn/versions/
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+MCP_GATEWAY_ADOPTION_ROADMAP.md
+MCP_GATEWAY_RESEARCH.md

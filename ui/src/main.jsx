@@ -41,6 +41,7 @@ const initialAPIKeyForm = {
   id: "",
   name: "",
   value: "",
+  rotateValue: false,
   endpointIds: [],
   enabled: true,
 };
@@ -50,6 +51,116 @@ const defaultPreferences = {
   defaultTransport: "http",
   denseTables: false,
   showAdvancedControls: true,
+  sortByRecent: {},
+  tableColumns: {},
+};
+
+const tableColumns = {
+  servers: [
+    { id: "name", labelKey: "common.name", width: "minmax(10rem, 1.1fr)" },
+    { id: "target", labelKey: "table.target", width: "minmax(16rem, 1.8fr)" },
+    { id: "status", labelKey: "common.status", width: "minmax(8rem, 0.75fr)" },
+    { id: "usage", labelKey: "common.usage", width: "minmax(10rem, 0.9fr)" },
+    { id: "createdAt", labelKey: "table.createdAt", width: "minmax(9rem, 0.75fr)" },
+    { id: "updatedAt", labelKey: "table.updatedAt", width: "minmax(9rem, 0.75fr)" },
+  ],
+  endpoints: [
+    { id: "name", labelKey: "common.name", width: "minmax(10rem, 1.1fr)" },
+    { id: "url", labelKey: "table.mcpUrl", width: "minmax(16rem, 1.6fr)" },
+    { id: "servers", labelKey: "common.servers", width: "minmax(12rem, 1fr)" },
+    { id: "usage", labelKey: "common.usage", width: "minmax(10rem, 0.9fr)" },
+    { id: "rateLimit", labelKey: "table.rateLimit", width: "minmax(8rem, 0.8fr)" },
+    { id: "createdAt", labelKey: "table.createdAt", width: "minmax(9rem, 0.75fr)" },
+    { id: "updatedAt", labelKey: "table.updatedAt", width: "minmax(9rem, 0.75fr)" },
+  ],
+  apiKeys: [
+    { id: "name", labelKey: "common.name", width: "minmax(10rem, 1.1fr)" },
+    { id: "resources", labelKey: "common.resources", width: "minmax(16rem, 1.5fr)" },
+    { id: "status", labelKey: "common.status", width: "minmax(8rem, 0.7fr)" },
+    { id: "createdAt", labelKey: "table.createdAt", width: "minmax(9rem, 0.75fr)" },
+    { id: "updatedAt", labelKey: "table.updatedAt", width: "minmax(9rem, 0.75fr)" },
+  ],
+  tools: [
+    { id: "name", labelKey: "common.name", width: "minmax(14rem, 1.3fr)" },
+    { id: "server", labelKey: "unit.server.one", width: "minmax(10rem, 0.8fr)" },
+    { id: "nativeName", labelKey: "table.nativeName", width: "minmax(10rem, 0.8fr)" },
+    { id: "description", labelKey: "common.description", width: "minmax(18rem, 1.8fr)" },
+    { id: "createdAt", labelKey: "table.createdAt", width: "minmax(9rem, 0.75fr)" },
+    { id: "updatedAt", labelKey: "table.updatedAt", width: "minmax(9rem, 0.75fr)" },
+  ],
+};
+
+const actionColumnWidth = "minmax(8rem, 0.5fr)";
+
+const tableFilterFields = {
+  servers: [
+    {
+      id: "enabled",
+      labelKey: "common.status",
+      options: [
+        { value: "enabled", labelKey: "common.enabled" },
+        { value: "disabled", labelKey: "common.disabled" },
+      ],
+    },
+    {
+      id: "running",
+      labelKey: "filter.runningState",
+      options: [
+        { value: "running", labelKey: "common.running" },
+        { value: "stopped", labelKey: "common.stopped" },
+      ],
+    },
+    {
+      id: "transport",
+      labelKey: "server.transport",
+      options: [
+        { value: "http", labelKey: "settings.httpUrl" },
+        { value: "stdio", labelKey: "settings.localStdio" },
+      ],
+    },
+  ],
+  endpoints: [
+    {
+      id: "enabled",
+      labelKey: "common.status",
+      options: [
+        { value: "enabled", labelKey: "common.enabled" },
+        { value: "disabled", labelKey: "common.disabled" },
+      ],
+    },
+  ],
+  apiKeys: [
+    {
+      id: "enabled",
+      labelKey: "common.status",
+      options: [
+        { value: "enabled", labelKey: "common.enabled" },
+        { value: "disabled", labelKey: "common.disabled" },
+      ],
+    },
+    {
+      id: "hasValue",
+      labelKey: "filter.secretValue",
+      options: [
+        { value: "yes", labelKey: "filter.hasSecret" },
+        { value: "no", labelKey: "filter.missingSecret" },
+      ],
+    },
+  ],
+  tools: [
+    {
+      id: "serverId",
+      labelKey: "unit.server.one",
+      dynamicOptions: true,
+    },
+  ],
+};
+
+const emptyTableFilters = {
+  servers: [],
+  endpoints: [],
+  apiKeys: [],
+  tools: [],
 };
 
 function parseStrings(source) {
@@ -99,6 +210,8 @@ function initialPreferences() {
       defaultTransport: parsed.defaultTransport === "stdio" ? "stdio" : "http",
       denseTables: Boolean(parsed.denseTables),
       showAdvancedControls: parsed.showAdvancedControls !== false,
+      sortByRecent: typeof parsed.sortByRecent === "object" && parsed.sortByRecent ? parsed.sortByRecent : {},
+      tableColumns: typeof parsed.tableColumns === "object" && parsed.tableColumns ? parsed.tableColumns : {},
     };
   } catch {
     return defaultPreferences;
@@ -267,12 +380,126 @@ function apiKeyPayloadFromForm(form) {
   };
 }
 
+function generateAPIKeyValue() {
+  const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  const bytes = new Uint8Array(32);
+  window.crypto.getRandomValues(bytes);
+  return `sk_${Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("")}`;
+}
+
 function pageCount(total, pageSize) {
   return Math.max(1, Math.ceil(total / pageSize));
 }
 
 function clampPage(page, total, pageSize) {
   return Math.min(Math.max(1, page), pageCount(total, pageSize));
+}
+
+function formatTimestamp(value) {
+  if (!value) return t("common.notSet");
+  const normalized = value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
+  const timestamp = new Date(normalized);
+  if (Number.isNaN(timestamp.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(timestamp);
+}
+
+function timestampValue(value) {
+  if (!value) return 0;
+  const normalized = value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
+  const timestamp = new Date(normalized);
+  return Number.isNaN(timestamp.getTime()) ? 0 : timestamp.getTime();
+}
+
+function sortByUpdatedAt(items, enabled) {
+  if (!enabled) return items;
+  return [...items].sort((a, b) => timestampValue(b.updatedAt) - timestampValue(a.updatedAt));
+}
+
+function visibleColumnIds(preferences, tableId) {
+  const columns = tableColumns[tableId] || [];
+  const saved = preferences.tableColumns?.[tableId];
+  if (!Array.isArray(saved)) return columns.map((column) => column.id);
+  const known = new Set(columns.map((column) => column.id));
+  const visible = saved.filter((id) => known.has(id));
+  return visible.length ? visible : columns.map((column) => column.id);
+}
+
+function columnVisible(visibleColumns, id) {
+  return visibleColumns.includes(id);
+}
+
+function tableGridTemplate(tableId, visibleColumns, includeActions = false) {
+  const columns = (tableColumns[tableId] || []).filter((column) => columnVisible(visibleColumns, column.id));
+  return [...columns.map((column) => column.width), ...(includeActions ? [actionColumnWidth] : [])].join(" ");
+}
+
+function filterField(tableId, fieldId) {
+  return (tableFilterFields[tableId] || []).find((field) => field.id === fieldId);
+}
+
+function filterOptions(tableId, fieldId, context = {}) {
+  const field = filterField(tableId, fieldId);
+  if (!field) return [];
+  if (field.dynamicOptions && fieldId === "serverId") {
+    return (context.servers || []).map((server) => ({
+      value: server.id,
+      label: server.name,
+    }));
+  }
+  return (field.options || []).map((option) => ({
+    value: option.value,
+    label: t(option.labelKey),
+  }));
+}
+
+function matchesTableFilter(tableId, item, filter, context = {}) {
+  switch (tableId) {
+    case "servers":
+      if (filter.field === "enabled") {
+        return filter.value === "enabled" ? item.enabled : !item.enabled;
+      }
+      if (filter.field === "running") {
+        const running = item.enabled && item.status?.running;
+        return filter.value === "running" ? running : item.enabled && !running;
+      }
+      if (filter.field === "transport") {
+        return (item.transport || "stdio") === filter.value;
+      }
+      return true;
+    case "endpoints":
+      if (filter.field === "enabled") {
+        return filter.value === "enabled" ? item.enabled : !item.enabled;
+      }
+      return true;
+    case "apiKeys":
+      if (filter.field === "enabled") {
+        return filter.value === "enabled" ? item.enabled : !item.enabled;
+      }
+      if (filter.field === "hasValue") {
+        return filter.value === "yes" ? item.hasValue : !item.hasValue;
+      }
+      return true;
+    case "tools":
+      if (filter.field === "serverId") {
+        return item.serverId === filter.value;
+      }
+      return true;
+    default:
+      return true;
+  }
+}
+
+function applyTableFilters(items, tableId, filters, context = {}) {
+  if (!filters?.length) return items;
+  return items.filter((item) => filters.every((filter) => matchesTableFilter(tableId, item, filter, context)));
+}
+
+function availableFilterFields(tableId, activeFilters) {
+  const activeFields = new Set((activeFilters || []).map((filter) => filter.field));
+  return (tableFilterFields[tableId] || []).filter((field) => !activeFields.has(field.id));
 }
 
 function initialTheme() {
@@ -293,12 +520,6 @@ function targetFor(server) {
 
 function endpointUrl(endpoint) {
   return `${location.origin}/mcp/${endpoint.id}`;
-}
-
-function maskedKey(value = "") {
-  if (!value) return t("common.notSet");
-  if (value.length <= 8) return "••••";
-  return `${value.slice(0, 4)}••••${value.slice(-4)}`;
 }
 
 function formFromPreset(preset) {
@@ -378,6 +599,7 @@ function App() {
   const [activeView, setActiveView] = useState(viewFromHash);
   const [theme, setTheme] = useState(initialTheme);
   const [preferences, setPreferences] = useState(initialPreferences);
+  const [tableFilters, setTableFilters] = useState(emptyTableFilters);
   const inflightLoads = useRef({});
 
   const endpointPattern = `${location.origin}/mcp/{endpointId}`;
@@ -545,44 +767,64 @@ function App() {
 
   const filteredServers = useMemo(() => {
     const query = serverSearch.trim().toLowerCase();
-    if (!query) return servers;
-    return servers.filter((server) =>
-      [server.id, server.name, server.transport, server.url, server.command].join(" ").toLowerCase().includes(query),
-    );
-  }, [servers, serverSearch]);
+    let items = servers;
+    if (query) {
+      items = items.filter((server) =>
+        [server.id, server.name, server.transport, server.url, server.command].join(" ").toLowerCase().includes(query),
+      );
+    }
+    return applyTableFilters(items, "servers", tableFilters.servers);
+  }, [servers, serverSearch, tableFilters.servers]);
 
   const filteredEndpoints = useMemo(() => {
     const query = endpointSearch.trim().toLowerCase();
-    if (!query) return endpoints;
-    return endpoints.filter((endpoint) =>
-      [endpoint.id, endpoint.name, endpoint.description, ...(endpoint.serverIds || [])].join(" ").toLowerCase().includes(query),
-    );
-  }, [endpoints, endpointSearch]);
+    let items = endpoints;
+    if (query) {
+      items = items.filter((endpoint) =>
+        [endpoint.id, endpoint.name, endpoint.description, ...(endpoint.serverIds || [])].join(" ").toLowerCase().includes(query),
+      );
+    }
+    return applyTableFilters(items, "endpoints", tableFilters.endpoints);
+  }, [endpoints, endpointSearch, tableFilters.endpoints]);
 
   const filteredAPIKeys = useMemo(() => {
     const query = apiKeySearch.trim().toLowerCase();
-    if (!query) return apiKeys;
-    return apiKeys.filter((key) =>
-      [key.id, key.name, ...(key.endpointIds || [])].join(" ").toLowerCase().includes(query),
-    );
-  }, [apiKeys, apiKeySearch]);
+    let items = apiKeys;
+    if (query) {
+      items = items.filter((key) =>
+        [key.id, key.name, ...(key.endpointIds || [])].join(" ").toLowerCase().includes(query),
+      );
+    }
+    return applyTableFilters(items, "apiKeys", tableFilters.apiKeys);
+  }, [apiKeys, apiKeySearch, tableFilters.apiKeys]);
 
   const filteredTools = useMemo(() => {
     const query = toolSearch.trim().toLowerCase();
-    if (!query) return tools;
-    return tools.filter((tool) =>
-      [tool.name, tool.serverName, tool.serverId, tool.nativeName, tool.description].join(" ").toLowerCase().includes(query),
-    );
-  }, [tools, toolSearch]);
+    let items = tools;
+    if (query) {
+      items = items.filter((tool) =>
+        [tool.name, tool.serverName, tool.serverId, tool.nativeName, tool.description].join(" ").toLowerCase().includes(query),
+      );
+    }
+    return applyTableFilters(items, "tools", tableFilters.tools, { servers });
+  }, [tools, toolSearch, tableFilters.tools, servers]);
 
+  const sortedServers = useMemo(() => sortByUpdatedAt(filteredServers, preferences.sortByRecent.servers), [filteredServers, preferences.sortByRecent.servers]);
+  const sortedEndpoints = useMemo(() => sortByUpdatedAt(filteredEndpoints, preferences.sortByRecent.endpoints), [filteredEndpoints, preferences.sortByRecent.endpoints]);
+  const sortedAPIKeys = useMemo(() => sortByUpdatedAt(filteredAPIKeys, preferences.sortByRecent.apiKeys), [filteredAPIKeys, preferences.sortByRecent.apiKeys]);
+  const sortedTools = useMemo(() => sortByUpdatedAt(filteredTools, preferences.sortByRecent.tools), [filteredTools, preferences.sortByRecent.tools]);
+  const serverColumns = visibleColumnIds(preferences, "servers");
+  const endpointColumns = visibleColumnIds(preferences, "endpoints");
+  const apiKeyColumns = visibleColumnIds(preferences, "apiKeys");
+  const toolColumns = visibleColumnIds(preferences, "tools");
   const serverPages = pageCount(filteredServers.length, serverPageSize);
   const endpointPages = pageCount(filteredEndpoints.length, endpointPageSize);
   const apiKeyPages = pageCount(filteredAPIKeys.length, apiKeyPageSize);
   const toolPages = pageCount(filteredTools.length, toolPageSize);
-  const visibleServers = filteredServers.slice((clampPage(serverPage, filteredServers.length, serverPageSize) - 1) * serverPageSize, clampPage(serverPage, filteredServers.length, serverPageSize) * serverPageSize);
-  const visibleEndpoints = filteredEndpoints.slice((clampPage(endpointPage, filteredEndpoints.length, endpointPageSize) - 1) * endpointPageSize, clampPage(endpointPage, filteredEndpoints.length, endpointPageSize) * endpointPageSize);
-  const visibleAPIKeys = filteredAPIKeys.slice((clampPage(apiKeyPage, filteredAPIKeys.length, apiKeyPageSize) - 1) * apiKeyPageSize, clampPage(apiKeyPage, filteredAPIKeys.length, apiKeyPageSize) * apiKeyPageSize);
-  const visibleTools = filteredTools.slice((clampPage(toolPage, filteredTools.length, toolPageSize) - 1) * toolPageSize, clampPage(toolPage, filteredTools.length, toolPageSize) * toolPageSize);
+  const visibleServers = sortedServers.slice((clampPage(serverPage, sortedServers.length, serverPageSize) - 1) * serverPageSize, clampPage(serverPage, sortedServers.length, serverPageSize) * serverPageSize);
+  const visibleEndpoints = sortedEndpoints.slice((clampPage(endpointPage, sortedEndpoints.length, endpointPageSize) - 1) * endpointPageSize, clampPage(endpointPage, sortedEndpoints.length, endpointPageSize) * endpointPageSize);
+  const visibleAPIKeys = sortedAPIKeys.slice((clampPage(apiKeyPage, sortedAPIKeys.length, apiKeyPageSize) - 1) * apiKeyPageSize, clampPage(apiKeyPage, sortedAPIKeys.length, apiKeyPageSize) * apiKeyPageSize);
+  const visibleTools = sortedTools.slice((clampPage(toolPage, sortedTools.length, toolPageSize) - 1) * toolPageSize, clampPage(toolPage, sortedTools.length, toolPageSize) * toolPageSize);
 
   function updateForm(name, value) {
     setForm((current) => {
@@ -686,8 +928,84 @@ function App() {
     setPreferences((current) => ({ ...current, [name]: value }));
   }
 
+  function toggleRecentSort(tableId) {
+    setPreferences((current) => ({
+      ...current,
+      sortByRecent: {
+        ...(current.sortByRecent || {}),
+        [tableId]: !current.sortByRecent?.[tableId],
+      },
+    }));
+  }
+
+  function toggleTableColumn(tableId, columnId) {
+    setPreferences((current) => {
+      const currentColumns = visibleColumnIds(current, tableId);
+      const nextColumns = currentColumns.includes(columnId)
+        ? currentColumns.filter((id) => id !== columnId)
+        : [...currentColumns, columnId];
+      if (!nextColumns.length) return current;
+      return {
+        ...current,
+        tableColumns: {
+          ...(current.tableColumns || {}),
+          [tableId]: nextColumns,
+        },
+      };
+    });
+  }
+
+  function resetTablePage(tableId) {
+    if (tableId === "servers") setServerPage(1);
+    if (tableId === "endpoints") setEndpointPage(1);
+    if (tableId === "apiKeys") setAPIKeyPage(1);
+    if (tableId === "tools") setToolPage(1);
+  }
+
+  function addTableFilter(tableId, fieldId, context = {}) {
+    const options = filterOptions(tableId, fieldId, context);
+    if (!options.length) return;
+    setTableFilters((current) => ({
+      ...current,
+      [tableId]: [
+        ...(current[tableId] || []),
+        {
+          id: crypto.randomUUID(),
+          field: fieldId,
+          value: options[0].value,
+        },
+      ],
+    }));
+    resetTablePage(tableId);
+  }
+
+  function updateTableFilter(tableId, filterId, value) {
+    setTableFilters((current) => ({
+      ...current,
+      [tableId]: (current[tableId] || []).map((filter) => (filter.id === filterId ? { ...filter, value } : filter)),
+    }));
+    resetTablePage(tableId);
+  }
+
+  function removeTableFilter(tableId, filterId) {
+    setTableFilters((current) => ({
+      ...current,
+      [tableId]: (current[tableId] || []).filter((filter) => filter.id !== filterId),
+    }));
+    resetTablePage(tableId);
+  }
+
+  function clearTableFilters(tableId) {
+    setTableFilters((current) => ({
+      ...current,
+      [tableId]: [],
+    }));
+    resetTablePage(tableId);
+  }
+
   function resetPreferences() {
     setPreferences(defaultPreferences);
+    setTableFilters(emptyTableFilters);
     setTheme("mcp");
     notify(t("toast.preferencesReset"), t("toast.preferencesResetMessage"), "warning");
   }
@@ -742,7 +1060,8 @@ function App() {
     setAPIKeyForm({
       id: key.id || "",
       name: key.name || "",
-      value: key.value || "",
+      value: "",
+      rotateValue: false,
       endpointIds: key.endpointIds || [],
       enabled: Boolean(key.enabled),
     });
@@ -975,8 +1294,7 @@ function App() {
               <section class="hero-grid workspace-panel overflow-hidden">
                 <div class="grid gap-6 lg:grid-cols-[1fr_22rem] lg:items-center">
                   <div>
-                    <div class="badge badge-primary badge-outline font-bold uppercase tracking-widest">{t("overview.badge")}</div>
-                    <h1 class="mt-4 text-4xl font-black tracking-tight text-slate-950 md:text-6xl">{t("brand.name")}</h1>
+                    <h1 class="text-4xl font-black tracking-tight text-slate-950 md:text-6xl">{t("brand.name")}</h1>
                     <p class="mt-4 max-w-2xl text-base text-slate-600">
                       {t("overview.hero")}
                     </p>
@@ -1042,13 +1360,20 @@ function App() {
                 pages={serverPages}
                 prev={() => setServerPage((page) => clampPage(page - 1, filteredServers.length, serverPageSize))}
                 next={() => setServerPage((page) => clampPage(page + 1, filteredServers.length, serverPageSize))}
+                tableId="servers"
+                visibleColumns={serverColumns}
+                sortActive={Boolean(preferences.sortByRecent.servers)}
+                onToggleSort={() => toggleRecentSort("servers")}
+                onToggleColumn={(columnId) => toggleTableColumn("servers", columnId)}
+                filters={tableFilters.servers}
+                onAddFilter={(fieldId) => addTableFilter("servers", fieldId)}
+                onUpdateFilter={(filterId, value) => updateTableFilter("servers", filterId, value)}
+                onRemoveFilter={(filterId) => removeTableFilter("servers", filterId)}
+                onClearFilters={() => clearTableFilters("servers")}
               >
                 <div class="data-table server-table">
-                  <div class="data-row data-head">
-                    <span>{t("common.name")}</span>
-                    <span>{t("table.target")}</span>
-                    <span>{t("common.status")}</span>
-                    <span>{t("common.usage")}</span>
+                  <div class="data-row data-head" style={{ gridTemplateColumns: tableGridTemplate("servers", serverColumns, true) }}>
+                    <TableHeader tableId="servers" visibleColumns={serverColumns} />
                     <span></span>
                   </div>
                   {loadingServers ? (
@@ -1064,6 +1389,7 @@ function App() {
                         onTest={testSavedServer}
                         onToggleEnabled={toggleServerEnabled}
                         onDelete={deleteServer}
+                        visibleColumns={serverColumns}
                       />
                     ))
                   ) : (
@@ -1102,14 +1428,20 @@ function App() {
                 pages={endpointPages}
                 prev={() => setEndpointPage((page) => clampPage(page - 1, filteredEndpoints.length, endpointPageSize))}
                 next={() => setEndpointPage((page) => clampPage(page + 1, filteredEndpoints.length, endpointPageSize))}
+                tableId="endpoints"
+                visibleColumns={endpointColumns}
+                sortActive={Boolean(preferences.sortByRecent.endpoints)}
+                onToggleSort={() => toggleRecentSort("endpoints")}
+                onToggleColumn={(columnId) => toggleTableColumn("endpoints", columnId)}
+                filters={tableFilters.endpoints}
+                onAddFilter={(fieldId) => addTableFilter("endpoints", fieldId)}
+                onUpdateFilter={(filterId, value) => updateTableFilter("endpoints", filterId, value)}
+                onRemoveFilter={(filterId) => removeTableFilter("endpoints", filterId)}
+                onClearFilters={() => clearTableFilters("endpoints")}
               >
                 <div class="data-table endpoint-table">
-                  <div class="data-row data-head">
-                    <span>{t("common.name")}</span>
-                    <span>{t("table.mcpUrl")}</span>
-                    <span>{t("common.servers")}</span>
-                    <span>{t("common.usage")}</span>
-                    <span>{t("table.rateLimit")}</span>
+                  <div class="data-row data-head" style={{ gridTemplateColumns: tableGridTemplate("endpoints", endpointColumns, true) }}>
+                    <TableHeader tableId="endpoints" visibleColumns={endpointColumns} />
                     <span></span>
                   </div>
                   {loadingEndpoints ? (
@@ -1123,6 +1455,7 @@ function App() {
                         onEdit={editEndpoint}
                         onToggleEnabled={toggleEndpointEnabled}
                         onDelete={deleteEndpoint}
+                        visibleColumns={endpointColumns}
                       />
                     ))
                   ) : (
@@ -1161,13 +1494,20 @@ function App() {
                 pages={apiKeyPages}
                 prev={() => setAPIKeyPage((page) => clampPage(page - 1, filteredAPIKeys.length, apiKeyPageSize))}
                 next={() => setAPIKeyPage((page) => clampPage(page + 1, filteredAPIKeys.length, apiKeyPageSize))}
+                tableId="apiKeys"
+                visibleColumns={apiKeyColumns}
+                sortActive={Boolean(preferences.sortByRecent.apiKeys)}
+                onToggleSort={() => toggleRecentSort("apiKeys")}
+                onToggleColumn={(columnId) => toggleTableColumn("apiKeys", columnId)}
+                filters={tableFilters.apiKeys}
+                onAddFilter={(fieldId) => addTableFilter("apiKeys", fieldId)}
+                onUpdateFilter={(filterId, value) => updateTableFilter("apiKeys", filterId, value)}
+                onRemoveFilter={(filterId) => removeTableFilter("apiKeys", filterId)}
+                onClearFilters={() => clearTableFilters("apiKeys")}
               >
                 <div class="data-table api-key-table">
-                  <div class="data-row data-head">
-                    <span>{t("common.name")}</span>
-                    <span>{t("common.key")}</span>
-                    <span>{t("common.resources")}</span>
-                    <span>{t("common.status")}</span>
+                  <div class="data-row data-head" style={{ gridTemplateColumns: tableGridTemplate("apiKeys", apiKeyColumns, true) }}>
+                    <TableHeader tableId="apiKeys" visibleColumns={apiKeyColumns} />
                     <span></span>
                   </div>
                   {loadingAPIKeys ? (
@@ -1180,6 +1520,7 @@ function App() {
                         endpoints={endpoints}
                         onEdit={editAPIKey}
                         onDelete={deleteAPIKey}
+                        visibleColumns={apiKeyColumns}
                       />
                     ))
                   ) : (
@@ -1222,18 +1563,26 @@ function App() {
                 pages={toolPages}
                 prev={() => setToolPage((page) => clampPage(page - 1, filteredTools.length, toolPageSize))}
                 next={() => setToolPage((page) => clampPage(page + 1, filteredTools.length, toolPageSize))}
+                tableId="tools"
+                visibleColumns={toolColumns}
+                sortActive={Boolean(preferences.sortByRecent.tools)}
+                onToggleSort={() => toggleRecentSort("tools")}
+                onToggleColumn={(columnId) => toggleTableColumn("tools", columnId)}
+                filters={tableFilters.tools}
+                filterContext={{ servers }}
+                onAddFilter={(fieldId) => addTableFilter("tools", fieldId, { servers })}
+                onUpdateFilter={(filterId, value) => updateTableFilter("tools", filterId, value)}
+                onRemoveFilter={(filterId) => removeTableFilter("tools", filterId)}
+                onClearFilters={() => clearTableFilters("tools")}
               >
                 <div class="data-table tool-table">
-                  <div class="data-row data-head">
-                    <span>{t("common.name")}</span>
-                    <span>{t("unit.server.one")}</span>
-                    <span>{t("table.nativeName")}</span>
-                    <span>{t("common.description")}</span>
+                  <div class="data-row data-head" style={{ gridTemplateColumns: tableGridTemplate("tools", toolColumns) }}>
+                    <TableHeader tableId="tools" visibleColumns={toolColumns} />
                   </div>
                   {loadingTools ? (
                     <SkeletonList />
                   ) : visibleTools.length ? (
-                    visibleTools.map((tool) => <ToolCard key={tool.name} tool={tool} />)
+                    visibleTools.map((tool) => <ToolCard key={tool.name} tool={tool} visibleColumns={toolColumns} />)
                   ) : (
                     <EmptyState message={t("empty.noTools")} />
                   )}
@@ -1367,6 +1716,7 @@ function App() {
         <APIKeyForm
           form={apiKeyForm}
           endpoints={endpoints}
+          editing={editingAPIKey}
           saving={savingAPIKey}
           onSubmit={saveAPIKey}
           onClear={() => {
@@ -1651,7 +2001,9 @@ function EndpointForm({ form, servers, saving, onSubmit, onClear, onUpdate, onTo
   );
 }
 
-function APIKeyForm({ form, endpoints, saving, onSubmit, onClear, onUpdate, onToggleEndpoint }) {
+function APIKeyForm({ form, endpoints, editing, saving, onSubmit, onClear, onUpdate, onToggleEndpoint }) {
+  const showValueInput = !editing || form.rotateValue;
+
   return (
     <form class="grid gap-6 p-6" onSubmit={onSubmit}>
       <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -1668,9 +2020,56 @@ function APIKeyForm({ form, endpoints, saving, onSubmit, onClear, onUpdate, onTo
         <Field label={t("common.name")}>
           <input class="input input-bordered w-full" required value={form.name} placeholder={t("apiKey.placeholderName")} onInput={(event) => onUpdate("name", event.currentTarget.value)} />
         </Field>
-        <Field label={t("apiKey.value")}>
-          <input class="input input-bordered w-full font-mono" required value={form.value} placeholder={t("apiKey.placeholderValue")} onInput={(event) => onUpdate("value", event.currentTarget.value)} />
-          <p class="mt-2 text-xs text-slate-500">{t("apiKey.valueHelp")}</p>
+        <Field label={showValueInput && editing ? t("apiKey.newValue") : t("apiKey.value")}>
+          {showValueInput ? (
+            <>
+              <div class="join w-full">
+                <input
+                  class="input input-bordered join-item w-full font-mono"
+                  type="text"
+                  required={!editing || form.rotateValue}
+                  value={form.value}
+                  placeholder={t("apiKey.placeholderValue")}
+                  onInput={(event) => onUpdate("value", event.currentTarget.value)}
+                />
+                <button class="btn btn-outline join-item" type="button" onClick={() => onUpdate("value", generateAPIKeyValue())}>
+                  {t("common.generate")}
+                </button>
+              </div>
+              <p class="mt-2 text-xs text-slate-500">{editing ? t("apiKey.rotateHelp") : t("apiKey.valueHelp")}</p>
+              {editing ? (
+                <button
+                  class="btn btn-ghost btn-xs mt-2"
+                  type="button"
+                  onClick={() => {
+                    onUpdate("value", "");
+                    onUpdate("rotateValue", false);
+                  }}
+                >
+                  {t("action.cancelRotation")}
+                </button>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <div class="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                <div class="min-w-0">
+                  <div class="font-semibold text-slate-900">{t("apiKey.currentValue")}</div>
+                  <p class="mt-1 text-xs text-slate-500">{t("apiKey.currentValueHelp")}</p>
+                </div>
+                <button
+                  class="btn btn-outline btn-sm shrink-0"
+                  type="button"
+                  onClick={() => {
+                    onUpdate("rotateValue", true);
+                    onUpdate("value", generateAPIKeyValue());
+                  }}
+                >
+                  {t("action.rotateAPIKey")}
+                </button>
+              </div>
+            </>
+          )}
         </Field>
       </div>
 
@@ -1861,7 +2260,35 @@ function AuthAndHeaders({
   );
 }
 
-function ListPanel({ title, subtitle, action, searchValue, onSearch, pageSize, onPageSize, pageSizes, page, pages, prev, next, showAdvancedControls = true, children }) {
+function ListPanel({
+  title,
+  subtitle,
+  action,
+  searchValue,
+  onSearch,
+  pageSize,
+  onPageSize,
+  pageSizes,
+  page,
+  pages,
+  prev,
+  next,
+  showAdvancedControls = true,
+  tableId,
+  visibleColumns = [],
+  sortActive = false,
+  onToggleSort,
+  onToggleColumn,
+  filters = [],
+  filterContext = {},
+  onAddFilter,
+  onUpdateFilter,
+  onRemoveFilter,
+  onClearFilters,
+  children,
+}) {
+  const columns = tableColumns[tableId] || [];
+  const addableFilters = availableFilterFields(tableId, filters);
   return (
     <div class="workspace-panel">
       <div class="grid gap-4">
@@ -1882,19 +2309,87 @@ function ListPanel({ title, subtitle, action, searchValue, onSearch, pageSize, o
               <input placeholder={t("common.search")} value={searchValue} onInput={(event) => onSearch(event.currentTarget.value)} />
             </label>
             {showAdvancedControls ? (
-              <button class="filter-button" type="button">
-                <span>+</span>
-                {t("action.addFilter")}
-              </button>
+              <div class="dropdown dropdown-end">
+                <button class="filter-button" type="button" tabIndex="0" disabled={!addableFilters.length}>
+                  <span>+</span>
+                  {t("action.addFilter")}
+                </button>
+                {addableFilters.length ? (
+                  <div class="dropdown-content z-20 mt-2 w-56 rounded-xl border border-slate-200 bg-white p-2 shadow-lg" tabIndex="0">
+                    <div class="mb-2 px-2 text-xs font-bold uppercase tracking-wide text-slate-500">{t("action.filtersTitle")}</div>
+                    {addableFilters.map((field) => (
+                      <button
+                        key={field.id}
+                        class="btn btn-ghost btn-sm w-full justify-start"
+                        type="button"
+                        onClick={() => onAddFilter?.(field.id)}
+                      >
+                        {t(field.labelKey)}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
             ) : null}
           </div>
           {showAdvancedControls ? (
             <div class="toolbar-right">
-              <button class="control-button" type="button">↕ {t("action.lastExecuted")}</button>
-              <button class="control-button" type="button">{t("action.columns")}</button>
+              <button class={`control-button ${sortActive ? "control-button-active" : ""}`} type="button" onClick={onToggleSort}>
+                ↕ {t("action.lastExecuted")}
+              </button>
+              <div class="dropdown dropdown-end">
+                <button class="control-button" type="button" tabIndex="0">
+                  {t("action.columns", { shown: visibleColumns.length, total: columns.length })}
+                </button>
+                <div class="dropdown-content z-20 mt-2 w-56 rounded-xl border border-slate-200 bg-white p-3 shadow-lg" tabIndex="0">
+                  <div class="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">{t("action.columnsTitle")}</div>
+                  <div class="grid gap-2">
+                    {columns.map((column) => (
+                      <label key={column.id} class="flex cursor-pointer items-center gap-2 text-sm text-slate-700">
+                        <input
+                          class="checkbox checkbox-primary checkbox-sm"
+                          type="checkbox"
+                          checked={columnVisible(visibleColumns, column.id)}
+                          disabled={visibleColumns.length === 1 && columnVisible(visibleColumns, column.id)}
+                          onChange={() => onToggleColumn?.(column.id)}
+                        />
+                        <span>{t(column.labelKey)}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
             </div>
           ) : null}
         </div>
+        {filters.length ? (
+          <div class="filter-bar">
+            {filters.map((filter) => {
+              const field = filterField(tableId, filter.field);
+              const options = filterOptions(tableId, filter.field, filterContext);
+              return (
+                <div key={filter.id} class="filter-chip">
+                  <span class="filter-chip-label">{t(field?.labelKey || filter.field)}</span>
+                  <select
+                    class="filter-chip-select"
+                    value={filter.value}
+                    onChange={(event) => onUpdateFilter?.(filter.id, event.currentTarget.value)}
+                  >
+                    {options.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                  <button class="filter-chip-remove" type="button" aria-label={t("action.removeFilter")} onClick={() => onRemoveFilter?.(filter.id)}>
+                    ×
+                  </button>
+                </div>
+              );
+            })}
+            <button class="filter-clear" type="button" onClick={() => onClearFilters?.()}>
+              {t("action.clearFilters")}
+            </button>
+          </div>
+        ) : null}
         <div class="min-h-80 overflow-hidden rounded-xl border border-slate-200">{children}</div>
         <div class="pagination-bar">
           <div class="pagination-size">
@@ -1916,7 +2411,17 @@ function ListPanel({ title, subtitle, action, searchValue, onSearch, pageSize, o
   );
 }
 
-function ServerCard({ server, testing, onEdit, onRestart, onTest, onToggleEnabled, onDelete }) {
+function TableHeader({ tableId, visibleColumns }) {
+  return (
+    <>
+      {(tableColumns[tableId] || [])
+        .filter((column) => columnVisible(visibleColumns, column.id))
+        .map((column) => <span key={column.id}>{t(column.labelKey)}</span>)}
+    </>
+  );
+}
+
+function ServerCard({ server, testing, onEdit, onRestart, onTest, onToggleEnabled, onDelete, visibleColumns }) {
   const disabled = !server.enabled;
   const running = !disabled && server.status?.running;
   const statusLabel = disabled ? t("common.disabled") : running ? t("common.running") : t("common.stopped");
@@ -1925,19 +2430,27 @@ function ServerCard({ server, testing, onEdit, onRestart, onTest, onToggleEnable
   const usageLabel = `${usage.totalCalls || 0} ${pluralKey(usage.totalCalls || 0, "unit.call.one", "unit.call.other")}`;
 
   return (
-    <div class="data-row">
-      <div class="min-w-0">
-        <div class="truncate font-semibold text-slate-900">{server.name}</div>
-      </div>
-      <div class="truncate text-sm text-slate-600">{server.transport || "stdio"} - {targetFor(server)}</div>
-      <div>
-        <span class={`status-pill ${statusClass}`}>{statusLabel}</span>
-        {server.status?.error ? <div class="mt-1 truncate text-xs text-error">{server.status.error}</div> : null}
-      </div>
-      <div class="text-sm text-slate-500">
-        <div class="font-semibold text-slate-700">{usageLabel}</div>
-        <div class="mt-1 text-xs">{usage.successfulCalls || 0} {t("common.ok")} / {usage.failedCalls || 0} {t("common.failed")}</div>
-      </div>
+    <div class="data-row" style={{ gridTemplateColumns: tableGridTemplate("servers", visibleColumns, true) }}>
+      {columnVisible(visibleColumns, "name") ? (
+        <div class="min-w-0">
+          <div class="truncate font-semibold text-slate-900">{server.name}</div>
+        </div>
+      ) : null}
+      {columnVisible(visibleColumns, "target") ? <div class="truncate text-sm text-slate-600">{server.transport || "stdio"} - {targetFor(server)}</div> : null}
+      {columnVisible(visibleColumns, "status") ? (
+        <div>
+          <span class={`status-pill ${statusClass}`}>{statusLabel}</span>
+          {server.status?.error ? <div class="mt-1 truncate text-xs text-error">{server.status.error}</div> : null}
+        </div>
+      ) : null}
+      {columnVisible(visibleColumns, "usage") ? (
+        <div class="text-sm text-slate-500">
+          <div class="font-semibold text-slate-700">{usageLabel}</div>
+          <div class="mt-1 text-xs">{usage.successfulCalls || 0} {t("common.ok")} / {usage.failedCalls || 0} {t("common.failed")}</div>
+        </div>
+      ) : null}
+      {columnVisible(visibleColumns, "createdAt") ? <TimestampCell value={server.createdAt} /> : null}
+      {columnVisible(visibleColumns, "updatedAt") ? <TimestampCell value={server.updatedAt} /> : null}
       <div class="flex justify-end">
         <div class="dropdown dropdown-end">
           <button class="btn btn-ghost btn-xs action-menu-trigger" type="button" tabIndex="0" aria-label={t("card.openActions", { name: server.name })}>
@@ -1958,7 +2471,7 @@ function ServerCard({ server, testing, onEdit, onRestart, onTest, onToggleEnable
   );
 }
 
-function EndpointCard({ endpoint, servers, onEdit, onToggleEnabled, onDelete }) {
+function EndpointCard({ endpoint, servers, onEdit, onToggleEnabled, onDelete, visibleColumns }) {
   const disabled = !endpoint.enabled;
   const usage = endpoint.usage || {};
   const limit = usage.limitPerMinute || endpoint.rateLimit?.requestsPerMinute || 0;
@@ -1968,29 +2481,39 @@ function EndpointCard({ endpoint, servers, onEdit, onToggleEnabled, onDelete }) 
   const missingServerCount = Math.max((endpoint.serverIds || []).length - selectedServers.length, 0);
 
   return (
-    <div class="data-row">
-      <div class="min-w-0">
-        <div class="truncate font-semibold text-slate-900">{endpoint.name}</div>
-        <div class="mt-1 flex items-center gap-2 text-xs text-slate-500">
-          <span class={`status-pill ${disabled ? "status-neutral" : "status-success"}`}>{disabled ? t("common.disabled") : t("common.enabled")}</span>
+    <div class="data-row" style={{ gridTemplateColumns: tableGridTemplate("endpoints", visibleColumns, true) }}>
+      {columnVisible(visibleColumns, "name") ? (
+        <div class="min-w-0">
+          <div class="truncate font-semibold text-slate-900">{endpoint.name}</div>
+          <div class="mt-1 flex items-center gap-2 text-xs text-slate-500">
+            <span class={`status-pill ${disabled ? "status-neutral" : "status-success"}`}>{disabled ? t("common.disabled") : t("common.enabled")}</span>
+          </div>
         </div>
-      </div>
-      <code class="truncate rounded-lg bg-primary/10 px-2 py-1 text-xs text-primary">{endpointUrl(endpoint)}</code>
-      <div class="text-sm text-slate-500">
-        <div class="font-semibold text-slate-700">{selectedServers.length} {pluralKey(selectedServers.length, "unit.server.one", "unit.server.other")}</div>
-        <div class="mt-1 line-clamp-2 text-xs">
-          {selectedServers.map((server) => server.name).join(", ") || t("card.noActiveServerRecords")}
-          {missingServerCount ? `, ${missingServerCount} ${t("common.missing")}` : ""}
+      ) : null}
+      {columnVisible(visibleColumns, "url") ? <code class="truncate rounded-lg bg-primary/10 px-2 py-1 text-xs text-primary">{endpointUrl(endpoint)}</code> : null}
+      {columnVisible(visibleColumns, "servers") ? (
+        <div class="text-sm text-slate-500">
+          <div class="font-semibold text-slate-700">{selectedServers.length} {pluralKey(selectedServers.length, "unit.server.one", "unit.server.other")}</div>
+          <div class="mt-1 line-clamp-2 text-xs">
+            {selectedServers.map((server) => server.name).join(", ") || t("card.noActiveServerRecords")}
+            {missingServerCount ? `, ${missingServerCount} ${t("common.missing")}` : ""}
+          </div>
         </div>
-      </div>
-      <div class="text-sm text-slate-500">
-        <div class="font-semibold text-slate-700">{usageLabel}</div>
-        <div class="mt-1 text-xs">{usage.successfulCalls || 0} {t("common.ok")} / {usage.failedCalls || 0} {t("common.failed")} / {usage.rateLimitedCalls || 0} {t("common.limited")}</div>
-      </div>
-      <div class="text-sm text-slate-500">
-        <div class="font-semibold text-slate-700">{limitLabel}</div>
-        <div class="mt-1 text-xs">{t("endpoint.quota")}</div>
-      </div>
+      ) : null}
+      {columnVisible(visibleColumns, "usage") ? (
+        <div class="text-sm text-slate-500">
+          <div class="font-semibold text-slate-700">{usageLabel}</div>
+          <div class="mt-1 text-xs">{usage.successfulCalls || 0} {t("common.ok")} / {usage.failedCalls || 0} {t("common.failed")} / {usage.rateLimitedCalls || 0} {t("common.limited")}</div>
+        </div>
+      ) : null}
+      {columnVisible(visibleColumns, "rateLimit") ? (
+        <div class="text-sm text-slate-500">
+          <div class="font-semibold text-slate-700">{limitLabel}</div>
+          <div class="mt-1 text-xs">{t("endpoint.quota")}</div>
+        </div>
+      ) : null}
+      {columnVisible(visibleColumns, "createdAt") ? <TimestampCell value={endpoint.createdAt} /> : null}
+      {columnVisible(visibleColumns, "updatedAt") ? <TimestampCell value={endpoint.updatedAt} /> : null}
       <div class="flex justify-end">
         <div class="dropdown dropdown-end">
           <button class="btn btn-ghost btn-xs action-menu-trigger" type="button" tabIndex="0" aria-label={t("card.openActions", { name: endpoint.name })}>
@@ -2009,28 +2532,35 @@ function EndpointCard({ endpoint, servers, onEdit, onToggleEnabled, onDelete }) 
   );
 }
 
-function APIKeyCard({ apiKey, endpoints, onEdit, onDelete }) {
+function APIKeyCard({ apiKey, endpoints, onEdit, onDelete, visibleColumns }) {
   const disabled = !apiKey.enabled;
   const selectedEndpoints = endpoints.filter((endpoint) => (apiKey.endpointIds || []).includes(endpoint.id));
   const missingEndpointCount = Math.max((apiKey.endpointIds || []).length - selectedEndpoints.length, 0);
 
   return (
-    <div class="data-row">
-      <div class="min-w-0">
-        <div class="truncate font-semibold text-slate-900">{apiKey.name}</div>
-        <div class="mt-1 truncate font-mono text-xs text-slate-500">{apiKey.id}</div>
-      </div>
-      <code class="truncate rounded-lg bg-primary/10 px-2 py-1 text-xs text-primary">{maskedKey(apiKey.value)}</code>
-      <div class="text-sm text-slate-500">
-        <div class="font-semibold text-slate-700">{selectedEndpoints.length} {pluralKey(selectedEndpoints.length, "unit.endpoint.one", "unit.endpoint.other")}</div>
-        <div class="mt-1 line-clamp-2 text-xs">
-          {selectedEndpoints.map((endpoint) => endpoint.name).join(", ") || t("card.noActiveEndpointRecords")}
-          {missingEndpointCount ? `, ${missingEndpointCount} ${t("common.missing")}` : ""}
+    <div class="data-row" style={{ gridTemplateColumns: tableGridTemplate("apiKeys", visibleColumns, true) }}>
+      {columnVisible(visibleColumns, "name") ? (
+        <div class="min-w-0">
+          <div class="truncate font-semibold text-slate-900">{apiKey.name}</div>
+          <div class="mt-1 truncate font-mono text-xs text-slate-500">{apiKey.id}</div>
         </div>
-      </div>
-      <div>
-        <span class={`status-pill ${disabled ? "status-neutral" : "status-success"}`}>{disabled ? t("common.disabled") : t("common.enabled")}</span>
-      </div>
+      ) : null}
+      {columnVisible(visibleColumns, "resources") ? (
+        <div class="text-sm text-slate-500">
+          <div class="font-semibold text-slate-700">{selectedEndpoints.length} {pluralKey(selectedEndpoints.length, "unit.endpoint.one", "unit.endpoint.other")}</div>
+          <div class="mt-1 line-clamp-2 text-xs">
+            {selectedEndpoints.map((endpoint) => endpoint.name).join(", ") || t("card.noActiveEndpointRecords")}
+            {missingEndpointCount ? `, ${missingEndpointCount} ${t("common.missing")}` : ""}
+          </div>
+        </div>
+      ) : null}
+      {columnVisible(visibleColumns, "status") ? (
+        <div>
+          <span class={`status-pill ${disabled ? "status-neutral" : "status-success"}`}>{disabled ? t("common.disabled") : t("common.enabled")}</span>
+        </div>
+      ) : null}
+      {columnVisible(visibleColumns, "createdAt") ? <TimestampCell value={apiKey.createdAt} /> : null}
+      {columnVisible(visibleColumns, "updatedAt") ? <TimestampCell value={apiKey.updatedAt} /> : null}
       <div class="flex justify-end">
         <div class="dropdown dropdown-end">
           <button class="btn btn-ghost btn-xs action-menu-trigger" type="button" tabIndex="0" aria-label={t("card.openActions", { name: apiKey.name })}>
@@ -2048,13 +2578,23 @@ function APIKeyCard({ apiKey, endpoints, onEdit, onDelete }) {
   );
 }
 
-function ToolCard({ tool }) {
+function ToolCard({ tool, visibleColumns }) {
   return (
-    <div class="data-row">
-      <div class="break-all font-mono text-sm font-semibold text-primary">{tool.name}</div>
-      <div class="text-sm text-slate-600">{tool.serverName}</div>
-      <div class="font-mono text-xs text-slate-500">{tool.nativeName}</div>
-      <div class="line-clamp-2 text-sm text-slate-500">{tool.description || t("card.noDescription")}</div>
+    <div class="data-row" style={{ gridTemplateColumns: tableGridTemplate("tools", visibleColumns) }}>
+      {columnVisible(visibleColumns, "name") ? <div class="break-all font-mono text-sm font-semibold text-primary">{tool.name}</div> : null}
+      {columnVisible(visibleColumns, "server") ? <div class="text-sm text-slate-600">{tool.serverName}</div> : null}
+      {columnVisible(visibleColumns, "nativeName") ? <div class="font-mono text-xs text-slate-500">{tool.nativeName}</div> : null}
+      {columnVisible(visibleColumns, "description") ? <div class="line-clamp-2 text-sm text-slate-500">{tool.description || t("card.noDescription")}</div> : null}
+      {columnVisible(visibleColumns, "createdAt") ? <TimestampCell value={tool.createdAt} /> : null}
+      {columnVisible(visibleColumns, "updatedAt") ? <TimestampCell value={tool.updatedAt} /> : null}
+    </div>
+  );
+}
+
+function TimestampCell({ value }) {
+  return (
+    <div class="text-xs text-slate-500" title={value || t("common.notSet")}>
+      {formatTimestamp(value)}
     </div>
   );
 }

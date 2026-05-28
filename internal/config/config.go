@@ -37,6 +37,8 @@ type Server struct {
 	Env       map[string]string `json:"env,omitempty"`
 	Enabled   bool              `json:"enabled"`
 	Weight    int               `json:"weight"`
+	CreatedAt string            `json:"createdAt,omitempty"`
+	UpdatedAt string            `json:"updatedAt,omitempty"`
 }
 
 type Endpoint struct {
@@ -46,6 +48,8 @@ type Endpoint struct {
 	ServerIDs   []string  `json:"serverIds"`
 	RateLimit   RateLimit `json:"rateLimit,omitempty"`
 	Enabled     bool      `json:"enabled"`
+	CreatedAt   string    `json:"createdAt,omitempty"`
+	UpdatedAt   string    `json:"updatedAt,omitempty"`
 }
 
 type APIKey struct {
@@ -54,6 +58,8 @@ type APIKey struct {
 	Value       string   `json:"value"`
 	EndpointIDs []string `json:"endpointIds"`
 	Enabled     bool     `json:"enabled"`
+	CreatedAt   string   `json:"createdAt,omitempty"`
+	UpdatedAt   string   `json:"updatedAt,omitempty"`
 }
 
 type RateLimit struct {
@@ -77,6 +83,8 @@ type ToolRecord struct {
 	NativeName  string
 	Description string
 	InputSchema json.RawMessage
+	CreatedAt   string
+	UpdatedAt   string
 }
 
 type UsageRecord struct {
@@ -131,7 +139,7 @@ func (s *Store) Close() error {
 
 func (s *Store) List() []Server {
 	rows, err := s.db.Query(`
-		SELECT id, name, transport, url, auth_json, headers_json, rate_limit_json, command, args_json, env_json, enabled, weight
+		SELECT id, name, transport, url, auth_json, headers_json, rate_limit_json, command, args_json, env_json, enabled, weight, created_at, updated_at
 		FROM servers
 		ORDER BY id
 	`)
@@ -152,7 +160,7 @@ func (s *Store) List() []Server {
 
 func (s *Store) Get(id string) (Server, bool) {
 	row := s.db.QueryRow(`
-		SELECT id, name, transport, url, auth_json, headers_json, rate_limit_json, command, args_json, env_json, enabled, weight
+		SELECT id, name, transport, url, auth_json, headers_json, rate_limit_json, command, args_json, env_json, enabled, weight, created_at, updated_at
 		FROM servers
 		WHERE id = ?
 	`, id)
@@ -165,7 +173,7 @@ func (s *Store) Get(id string) (Server, bool) {
 
 func (s *Store) ListEndpoints() []Endpoint {
 	rows, err := s.db.Query(`
-		SELECT id, name, description, server_ids_json, rate_limit_json, enabled
+		SELECT id, name, description, server_ids_json, rate_limit_json, enabled, created_at, updated_at
 		FROM endpoints
 		ORDER BY id
 	`)
@@ -186,7 +194,7 @@ func (s *Store) ListEndpoints() []Endpoint {
 
 func (s *Store) GetEndpoint(id string) (Endpoint, bool) {
 	row := s.db.QueryRow(`
-		SELECT id, name, description, server_ids_json, rate_limit_json, enabled
+		SELECT id, name, description, server_ids_json, rate_limit_json, enabled, created_at, updated_at
 		FROM endpoints
 		WHERE id = ?
 	`, id)
@@ -199,7 +207,7 @@ func (s *Store) GetEndpoint(id string) (Endpoint, bool) {
 
 func (s *Store) ListAPIKeys() []APIKey {
 	rows, err := s.db.Query(`
-		SELECT id, name, value, endpoint_ids_json, enabled
+		SELECT id, name, value, endpoint_ids_json, enabled, created_at, updated_at
 		FROM api_keys
 		ORDER BY id
 	`)
@@ -220,7 +228,7 @@ func (s *Store) ListAPIKeys() []APIKey {
 
 func (s *Store) GetAPIKey(id string) (APIKey, bool) {
 	row := s.db.QueryRow(`
-		SELECT id, name, value, endpoint_ids_json, enabled
+		SELECT id, name, value, endpoint_ids_json, enabled, created_at, updated_at
 		FROM api_keys
 		WHERE id = ?
 	`, id)
@@ -420,7 +428,7 @@ func (s *Store) DeleteAPIKey(id string) bool {
 
 func (s *Store) ListToolRecords() ([]ToolRecord, error) {
 	rows, err := s.db.Query(`
-		SELECT gateway_name, server_id, server_name, native_name, description, input_schema_json
+		SELECT gateway_name, server_id, server_name, native_name, description, input_schema_json, created_at, updated_at
 		FROM tool_cache
 		ORDER BY server_id, native_name
 	`)
@@ -433,7 +441,7 @@ func (s *Store) ListToolRecords() ([]ToolRecord, error) {
 	for rows.Next() {
 		var tool ToolRecord
 		var inputSchema string
-		if err := rows.Scan(&tool.Name, &tool.ServerID, &tool.ServerName, &tool.NativeName, &tool.Description, &inputSchema); err != nil {
+		if err := rows.Scan(&tool.Name, &tool.ServerID, &tool.ServerName, &tool.NativeName, &tool.Description, &inputSchema, &tool.CreatedAt, &tool.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if inputSchema != "" {
@@ -461,9 +469,9 @@ func (s *Store) ReplaceToolRecords(serverID string, tools []ToolRecord) error {
 		}
 		if _, err := tx.Exec(`
 			INSERT INTO tool_cache (
-				server_id, gateway_name, server_name, native_name, description, input_schema_json, updated_at
+				server_id, gateway_name, server_name, native_name, description, input_schema_json, created_at, updated_at
 			)
-			VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+			VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		`, tool.ServerID, tool.Name, tool.ServerName, tool.NativeName, tool.Description, inputSchema); err != nil {
 			return err
 		}
@@ -770,6 +778,27 @@ func (s *Store) migrate() error {
 	if err := s.addColumnIfMissing("servers", "rate_limit_json", "TEXT NOT NULL DEFAULT '{}'"); err != nil {
 		return err
 	}
+	if err := s.ensureTimestampColumns(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Store) ensureTimestampColumns() error {
+	for _, table := range []string{"servers", "endpoints", "api_keys", "tool_cache"} {
+		if err := s.addColumnIfMissing(table, "created_at", "TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+		if err := s.addColumnIfMissing(table, "updated_at", "TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+		if _, err := s.db.Exec(`UPDATE ` + table + ` SET created_at = CURRENT_TIMESTAMP WHERE created_at = ''`); err != nil {
+			return err
+		}
+		if _, err := s.db.Exec(`UPDATE ` + table + ` SET updated_at = created_at WHERE updated_at = ''`); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -878,6 +907,8 @@ func scanServer(scanner rowScanner) (Server, error) {
 		&envJSON,
 		&enabled,
 		&server.Weight,
+		&server.CreatedAt,
+		&server.UpdatedAt,
 	)
 	if err != nil {
 		return Server{}, err
@@ -916,6 +947,8 @@ func scanEndpoint(scanner rowScanner) (Endpoint, error) {
 		&serverIDsJSON,
 		&rateLimitJSON,
 		&enabled,
+		&endpoint.CreatedAt,
+		&endpoint.UpdatedAt,
 	)
 	if err != nil {
 		return Endpoint{}, err
@@ -943,6 +976,8 @@ func scanAPIKey(scanner rowScanner) (APIKey, error) {
 		&key.Value,
 		&endpointIDsJSON,
 		&enabled,
+		&key.CreatedAt,
+		&key.UpdatedAt,
 	)
 	if err != nil {
 		return APIKey{}, err

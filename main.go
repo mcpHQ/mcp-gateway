@@ -16,6 +16,8 @@ import (
 	"github.com/rajdas/mcp-gateway/internal/web"
 )
 
+const shutdownTimeout = 10 * time.Second
+
 func main() {
 	addr := flag.String("addr", ":8080", "HTTP address to listen on")
 	dbPath := flag.String("db", "mcp-gateway.db", "path to SQLite gateway database")
@@ -45,21 +47,33 @@ func main() {
 		errs <- server.ListenAndServe()
 	}()
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	stopCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	select {
-	case sig := <-stop:
-		log.Printf("received %s, shutting down", sig)
+	case <-stopCtx.Done():
+		log.Printf("shutdown signal received, stopping server")
 	case err := <-errs:
 		if !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("server error: %v", err)
 		}
+		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Restore default signal handling so a second Ctrl+C can force the process down.
+	stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {
 		log.Printf("shutdown error: %v", err)
+		if closeErr := server.Close(); closeErr != nil {
+			log.Printf("force close error: %v", closeErr)
+		}
 	}
+
+	if err := <-errs; err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Printf("server error during shutdown: %v", err)
+	}
+	log.Printf("shutdown complete")
 }

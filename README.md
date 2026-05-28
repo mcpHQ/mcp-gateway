@@ -179,6 +179,22 @@ curl -X POST http://localhost:8080/api/endpoints/dev-tools/tools/github__search_
   -d '{"arguments":{"query":"mcp gateway","perPage":5}}'
 ```
 
+## Spec-First API Workflow
+
+The backend API contract is defined in `api/openapi.yaml`. Update that spec first when adding or changing REST admin routes or MCP JSON-RPC HTTP shapes, then regenerate the Go API types:
+
+```bash
+make generate
+```
+
+Before opening a PR, run:
+
+```bash
+make check
+```
+
+Generated Go types are written to `internal/web/openapi.gen.go`. The current implementation keeps the existing `net/http` route behavior in `internal/web/handler.go` while using generated types at low-risk HTTP boundaries.
+
 ## Gateway Meta-Tools
 
 The gateway exposes five built-in tools in the global catalog to reduce context bloat:

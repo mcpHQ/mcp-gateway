@@ -154,6 +154,76 @@ func TestRefreshToolsKeepsStaleCatalogOnFailure(t *testing.T) {
 	}
 }
 
+func TestAPIKeysRedactValuesAndPreserveExistingOnUpdate(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	withFakeUpstream(t, &fakeUpstream{})
+	gw := New(store)
+	if err := gw.UpsertServer(context.Background(), testServer()); err != nil {
+		t.Fatalf("upsert server: %v", err)
+	}
+	if err := gw.UpsertEndpoint(config.Endpoint{
+		ID:        "dev",
+		Name:      "Dev Tools",
+		ServerIDs: []string{"test"},
+		Enabled:   true,
+	}); err != nil {
+		t.Fatalf("upsert endpoint: %v", err)
+	}
+
+	if err := gw.UpsertAPIKey(config.APIKey{
+		ID:          "client",
+		Name:        "Client",
+		Value:       "secret-one",
+		EndpointIDs: []string{"dev"},
+		Enabled:     true,
+	}); err != nil {
+		t.Fatalf("upsert api key: %v", err)
+	}
+
+	statuses := gw.APIKeys()
+	if len(statuses) != 1 {
+		t.Fatalf("expected one api key status, got %#v", statuses)
+	}
+	if !statuses[0].HasValue || statuses[0].ID != "client" {
+		t.Fatalf("expected redacted api key metadata with value marker, got %#v", statuses[0])
+	}
+
+	if err := gw.UpsertAPIKey(config.APIKey{
+		ID:          "client",
+		Name:        "Client Updated",
+		EndpointIDs: []string{"dev"},
+		Enabled:     true,
+	}); err != nil {
+		t.Fatalf("upsert api key without value: %v", err)
+	}
+	stored, ok := store.GetAPIKey("client")
+	if !ok {
+		t.Fatal("expected stored api key")
+	}
+	if stored.Value != "secret-one" {
+		t.Fatalf("expected existing value to be preserved, got %q", stored.Value)
+	}
+
+	if err := gw.UpsertAPIKey(config.APIKey{
+		ID:          "client",
+		Name:        "Client Updated",
+		Value:       "secret-two",
+		EndpointIDs: []string{"dev"},
+		Enabled:     true,
+	}); err != nil {
+		t.Fatalf("rotate api key value: %v", err)
+	}
+	stored, ok = store.GetAPIKey("client")
+	if !ok {
+		t.Fatal("expected stored api key after rotation")
+	}
+	if stored.Value != "secret-two" {
+		t.Fatalf("expected rotated value, got %q", stored.Value)
+	}
+}
+
 func TestToolsSurviveGatewayRecreation(t *testing.T) {
 	store := newTestStore(t)
 	defer store.Close()

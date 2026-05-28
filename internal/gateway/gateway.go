@@ -42,7 +42,13 @@ type EndpointStatus struct {
 }
 
 type APIKeyStatus struct {
-	config.APIKey
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	EndpointIDs []string `json:"endpointIds"`
+	Enabled     bool     `json:"enabled"`
+	HasValue    bool     `json:"hasValue"`
+	CreatedAt   string   `json:"createdAt,omitempty"`
+	UpdatedAt   string   `json:"updatedAt,omitempty"`
 }
 
 type Tool struct {
@@ -52,6 +58,8 @@ type Tool struct {
 	NativeName  string          `json:"nativeName"`
 	Description string          `json:"description,omitempty"`
 	InputSchema json.RawMessage `json:"inputSchema,omitempty"`
+	CreatedAt   string          `json:"createdAt,omitempty"`
+	UpdatedAt   string          `json:"updatedAt,omitempty"`
 }
 
 type TestResult struct {
@@ -161,6 +169,8 @@ func (g *Gateway) loadPersistedTools() {
 			NativeName:  record.NativeName,
 			Description: record.Description,
 			InputSchema: cloneRawMessage(record.InputSchema),
+			CreatedAt:   record.CreatedAt,
+			UpdatedAt:   record.UpdatedAt,
 		})
 	}
 
@@ -251,7 +261,15 @@ func (g *Gateway) APIKeys() []APIKeyStatus {
 	keys := g.store.ListAPIKeys()
 	out := make([]APIKeyStatus, 0, len(keys))
 	for _, key := range keys {
-		out = append(out, APIKeyStatus{APIKey: key})
+		out = append(out, APIKeyStatus{
+			ID:          key.ID,
+			Name:        key.Name,
+			EndpointIDs: key.EndpointIDs,
+			Enabled:     key.Enabled,
+			HasValue:    key.Value != "",
+			CreatedAt:   key.CreatedAt,
+			UpdatedAt:   key.UpdatedAt,
+		})
 	}
 	return out
 }
@@ -303,6 +321,12 @@ func (g *Gateway) UpsertEndpoint(endpoint config.Endpoint) error {
 }
 
 func (g *Gateway) UpsertAPIKey(key config.APIKey) error {
+	if strings.TrimSpace(key.Value) == "" {
+		if existing, ok := g.store.GetAPIKey(strings.TrimSpace(key.ID)); ok {
+			key.Value = existing.Value
+		}
+	}
+
 	seen := map[string]bool{}
 	for _, endpointID := range key.EndpointIDs {
 		endpointID = strings.TrimSpace(endpointID)
@@ -783,6 +807,7 @@ func (g *Gateway) refreshServerTools(ctx context.Context, server config.Server) 
 
 func (g *Gateway) setCachedServerTools(server config.Server, serverTools []mcp.Tool) ([]Tool, error) {
 	tools := make([]Tool, 0, len(serverTools))
+	now := time.Now().UTC().Format(time.RFC3339)
 	for _, tool := range serverTools {
 		tools = append(tools, Tool{
 			Name:        gatewayToolName(server.ID, tool.Name),
@@ -791,6 +816,8 @@ func (g *Gateway) setCachedServerTools(server config.Server, serverTools []mcp.T
 			NativeName:  tool.Name,
 			Description: tool.Description,
 			InputSchema: cloneRawMessage(tool.InputSchema),
+			CreatedAt:   now,
+			UpdatedAt:   now,
 		})
 	}
 	sort.Slice(tools, func(i, j int) bool {
@@ -1118,6 +1145,8 @@ func toolRecordsFromTools(tools []Tool) []config.ToolRecord {
 			NativeName:  tool.NativeName,
 			Description: tool.Description,
 			InputSchema: cloneRawMessage(tool.InputSchema),
+			CreatedAt:   tool.CreatedAt,
+			UpdatedAt:   tool.UpdatedAt,
 		})
 	}
 	return records

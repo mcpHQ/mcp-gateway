@@ -314,6 +314,76 @@ body {
   padding: 0 0.9rem;
 }
 
+.control-button-active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #f8fafc;
+  padding: 0.2rem 0.35rem 0.2rem 0.75rem;
+  font-size: 0.82rem;
+}
+
+.filter-chip-label {
+  color: #64748b;
+  font-weight: 700;
+}
+
+.filter-chip-select {
+  border: 0;
+  background: transparent;
+  color: #0f172a;
+  font-size: 0.82rem;
+  font-weight: 600;
+  outline: 0;
+}
+
+.filter-chip-remove {
+  display: inline-flex;
+  width: 1.4rem;
+  height: 1.4rem;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #64748b;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.filter-chip-remove:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.filter-clear {
+  border: 0;
+  background: transparent;
+  color: #2563eb;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.filter-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .pagination-bar {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
@@ -414,19 +484,19 @@ body {
 }
 
 .server-table .data-row {
-  grid-template-columns: minmax(10rem, 1.1fr) minmax(16rem, 1.8fr) minmax(8rem, 0.75fr) minmax(10rem, 0.9fr) minmax(8rem, 0.5fr);
+  grid-template-columns: minmax(10rem, 1.1fr) minmax(16rem, 1.8fr) minmax(8rem, 0.75fr) minmax(10rem, 0.9fr) minmax(9rem, 0.75fr) minmax(9rem, 0.75fr) minmax(8rem, 0.5fr);
 }
 
 .endpoint-table .data-row {
-  grid-template-columns: minmax(10rem, 1.1fr) minmax(16rem, 1.6fr) minmax(12rem, 1fr) minmax(10rem, 0.9fr) minmax(8rem, 0.8fr) minmax(8rem, 0.5fr);
+  grid-template-columns: minmax(10rem, 1.1fr) minmax(16rem, 1.6fr) minmax(12rem, 1fr) minmax(10rem, 0.9fr) minmax(8rem, 0.8fr) minmax(9rem, 0.75fr) minmax(9rem, 0.75fr) minmax(8rem, 0.5fr);
 }
 
 .api-key-table .data-row {
-  grid-template-columns: minmax(10rem, 1.1fr) minmax(12rem, 1fr) minmax(16rem, 1.5fr) minmax(8rem, 0.7fr) minmax(8rem, 0.5fr);
+  grid-template-columns: minmax(10rem, 1.1fr) minmax(16rem, 1.5fr) minmax(8rem, 0.7fr) minmax(9rem, 0.75fr) minmax(9rem, 0.75fr) minmax(8rem, 0.5fr);
 }
 
 .tool-table .data-row {
-  grid-template-columns: minmax(14rem, 1.3fr) minmax(10rem, 0.8fr) minmax(10rem, 0.8fr) minmax(18rem, 1.8fr);
+  grid-template-columns: minmax(14rem, 1.3fr) minmax(10rem, 0.8fr) minmax(10rem, 0.8fr) minmax(18rem, 1.8fr) minmax(9rem, 0.75fr) minmax(9rem, 0.75fr);
 }
 
 .status-pill {
@@ -554,6 +624,34 @@ html[data-theme="dark"] .sidebar-link:hover,
 html[data-theme="dark"] .sidebar-link-active {
   background: #172554;
   color: #bfdbfe;
+}
+
+html[data-theme="dark"] .control-button-active {
+  border-color: #3b82f6;
+  background: #1e3a8a;
+  color: #dbeafe;
+}
+
+html[data-theme="dark"] .filter-chip {
+  border-color: #334155;
+  background: #111c2e;
+}
+
+html[data-theme="dark"] .filter-chip-label {
+  color: #94a3b8;
+}
+
+html[data-theme="dark"] .filter-chip-select {
+  color: #e2e8f0;
+}
+
+html[data-theme="dark"] .filter-chip-remove:hover {
+  background: #1e293b;
+  color: #f8fafc;
+}
+
+html[data-theme="dark"] .filter-clear {
+  color: #93c5fd;
 }
 
 html[data-theme="dark"] .count-pill,

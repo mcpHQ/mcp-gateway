@@ -1,0 +1,4 @@
+package: web
+generate:
+  models: true
+output: internal/web/openapi.gen.go

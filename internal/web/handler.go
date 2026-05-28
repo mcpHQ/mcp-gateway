@@ -22,9 +22,7 @@ type handler struct {
 	gw *gateway.Gateway
 }
 
-type apiError struct {
-	Error string `json:"error"`
-}
+type apiError = ErrorResponse
 
 func NewHandler(gw *gateway.Gateway) http.Handler {
 	h := &handler{gw: gw}
@@ -70,7 +68,7 @@ func (h *handler) health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) config(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"path": h.gw.ConfigPath()})
+	writeJSON(w, http.StatusOK, ConfigResponse{Path: h.gw.ConfigPath()})
 }
 
 func (h *handler) servers(w http.ResponseWriter, r *http.Request) {
@@ -283,19 +281,18 @@ func (h *handler) callEndpointTool(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	endpointID := r.PathValue("id")
 	toolName := r.PathValue("name")
-	var body struct {
-		Arguments map[string]any `json:"arguments"`
-	}
+	var body CallToolRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		logToolCall("rest", endpointID, toolName, http.StatusBadRequest, time.Since(start), err)
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if body.Arguments == nil {
-		body.Arguments = map[string]any{}
+	arguments := map[string]any{}
+	if body.Arguments != nil {
+		arguments = *body.Arguments
 	}
 
-	result, err := h.gw.CallEndpointTool(r.Context(), endpointID, toolName, body.Arguments)
+	result, err := h.gw.CallEndpointTool(r.Context(), endpointID, toolName, arguments)
 	if err != nil {
 		status := statusForToolCallError(err)
 		logToolCall("rest", endpointID, toolName, status, time.Since(start), err)

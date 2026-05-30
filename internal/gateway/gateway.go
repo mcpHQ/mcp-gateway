@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"sync"
@@ -22,12 +23,22 @@ type Gateway struct {
 	toolsMu   sync.RWMutex
 	toolCache map[string][]Tool
 
+	configMu       sync.RWMutex
+	servers        map[string]config.Server
+	endpoints      map[string]config.Endpoint
+	apiKeys        map[string]config.APIKey
+	apiKeysByValue map[string]config.APIKey
+
 	usageMu            sync.Mutex
 	usage              map[string]*usageCounter
 	usageDirty         map[string]struct{}
 	usageFlushStop     chan struct{}
 	usageFlushDone     chan struct{}
 	usageFlushStopOnce sync.Once
+
+	auditLogQueue    chan auditLogWork
+	auditLogDone     chan struct{}
+	auditLogStopOnce sync.Once
 }
 
 type ServerStatus struct {
@@ -49,6 +60,18 @@ type APIKeyStatus struct {
 	HasValue    bool     `json:"hasValue"`
 	CreatedAt   string   `json:"createdAt,omitempty"`
 	UpdatedAt   string   `json:"updatedAt,omitempty"`
+}
+
+type AuditLog struct {
+	ID         string `json:"id"`
+	Timestamp  string `json:"timestamp"`
+	Transport  string `json:"transport"`
+	EndpointID string `json:"endpointId,omitempty"`
+	ToolName   string `json:"toolName,omitempty"`
+	Status     int    `json:"status"`
+	DurationMS int64  `json:"durationMs"`
+	Caller     string `json:"caller,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 type Tool struct {
@@ -112,6 +135,11 @@ type usageCounter struct {
 	lastError        string
 }
 
+type auditLogWork struct {
+	record config.AuditLogRecord
+	flush  chan struct{}
+}
+
 const (
 	toolListServers  = "gateway_list_servers"
 	toolListTools    = "gateway_list_tools"
@@ -122,6 +150,8 @@ const (
 	toolRefreshTimeout = 30 * time.Second
 	toolRefreshWorkers = 4
 	usageFlushInterval = 500 * time.Millisecond
+	auditLogQueueSize  = 256
+	auditLogAttempts   = 8
 )
 
 func New(store *config.Store) *Gateway {
@@ -129,14 +159,22 @@ func New(store *config.Store) *Gateway {
 		store:          store,
 		clients:        map[string]mcp.Upstream{},
 		toolCache:      map[string][]Tool{},
+		servers:        map[string]config.Server{},
+		endpoints:      map[string]config.Endpoint{},
+		apiKeys:        map[string]config.APIKey{},
+		apiKeysByValue: map[string]config.APIKey{},
 		usage:          map[string]*usageCounter{},
 		usageDirty:     map[string]struct{}{},
 		usageFlushStop: make(chan struct{}),
 		usageFlushDone: make(chan struct{}),
+		auditLogQueue:  make(chan auditLogWork, auditLogQueueSize),
+		auditLogDone:   make(chan struct{}),
 	}
+	g.loadConfigCache()
 	g.loadPersistedTools()
 	g.loadPersistedUsage()
 	go g.flushUsageLoop()
+	go g.writeAuditLogsLoop()
 	return g
 }
 
@@ -152,6 +190,35 @@ func (g *Gateway) Start(ctx context.Context) error {
 		g.refreshServerToolsBestEffort(ctx, server)
 	}
 	return nil
+}
+
+func (g *Gateway) loadConfigCache() {
+	servers := map[string]config.Server{}
+	for _, server := range g.store.List() {
+		servers[server.ID] = cloneServerConfig(server)
+	}
+
+	endpoints := map[string]config.Endpoint{}
+	for _, endpoint := range g.store.ListEndpoints() {
+		endpoints[endpoint.ID] = cloneEndpointConfig(endpoint)
+	}
+
+	apiKeys := map[string]config.APIKey{}
+	apiKeysByValue := map[string]config.APIKey{}
+	for _, key := range g.store.ListAPIKeys() {
+		cloned := cloneAPIKeyConfig(key)
+		apiKeys[key.ID] = cloned
+		if key.Value != "" {
+			apiKeysByValue[key.Value] = cloned
+		}
+	}
+
+	g.configMu.Lock()
+	defer g.configMu.Unlock()
+	g.servers = servers
+	g.endpoints = endpoints
+	g.apiKeys = apiKeys
+	g.apiKeysByValue = apiKeysByValue
 }
 
 func (g *Gateway) loadPersistedTools() {
@@ -208,6 +275,7 @@ func (g *Gateway) loadPersistedUsage() {
 
 func (g *Gateway) Close() {
 	g.stopUsageFlusher()
+	g.stopAuditLogWriter()
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -220,6 +288,13 @@ func (g *Gateway) Close() {
 	g.toolsMu.Lock()
 	defer g.toolsMu.Unlock()
 	g.toolCache = map[string][]Tool{}
+
+	g.configMu.Lock()
+	defer g.configMu.Unlock()
+	g.servers = map[string]config.Server{}
+	g.endpoints = map[string]config.Endpoint{}
+	g.apiKeys = map[string]config.APIKey{}
+	g.apiKeysByValue = map[string]config.APIKey{}
 }
 
 func (g *Gateway) ConfigPath() string {
@@ -274,8 +349,127 @@ func (g *Gateway) APIKeys() []APIKeyStatus {
 	return out
 }
 
+func (g *Gateway) AuditLogs(limit int) ([]AuditLog, error) {
+	g.flushAuditLogs()
+
+	records, err := g.store.ListAuditLogs(limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AuditLog, 0, len(records))
+	for _, record := range records {
+		out = append(out, auditLogFromRecord(record))
+	}
+	return out, nil
+}
+
+func (g *Gateway) RecordAuditLog(record config.AuditLogRecord) error {
+	select {
+	case g.auditLogQueue <- auditLogWork{record: record}:
+		return nil
+	default:
+		return errors.New("audit log queue is full")
+	}
+}
+
+func (g *Gateway) AuthorizeEndpointAPIKey(endpointID, value string) (config.APIKey, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return config.APIKey{}, errors.New("api key required")
+	}
+
+	key, ok := g.cachedAPIKeyByValue(value)
+	if !ok || !key.Enabled {
+		return config.APIKey{}, errors.New("invalid api key")
+	}
+
+	endpointID = strings.TrimSpace(endpointID)
+	for _, allowed := range key.EndpointIDs {
+		if allowed == endpointID {
+			return key, nil
+		}
+	}
+	return config.APIKey{}, errors.New("api key not authorized for endpoint")
+}
+
+func (g *Gateway) cachedServer(id string) (config.Server, bool) {
+	g.configMu.RLock()
+	defer g.configMu.RUnlock()
+	server, ok := g.servers[strings.TrimSpace(id)]
+	return cloneServerConfig(server), ok
+}
+
+func (g *Gateway) cacheServer(server config.Server) {
+	server = cloneServerConfig(server)
+	g.configMu.Lock()
+	defer g.configMu.Unlock()
+	g.servers[server.ID] = server
+}
+
+func (g *Gateway) removeCachedServer(id string) {
+	g.configMu.Lock()
+	defer g.configMu.Unlock()
+	delete(g.servers, strings.TrimSpace(id))
+}
+
+func (g *Gateway) cachedEndpoint(id string) (config.Endpoint, bool) {
+	g.configMu.RLock()
+	defer g.configMu.RUnlock()
+	endpoint, ok := g.endpoints[strings.TrimSpace(id)]
+	return cloneEndpointConfig(endpoint), ok
+}
+
+func (g *Gateway) cacheEndpoint(endpoint config.Endpoint) {
+	endpoint = cloneEndpointConfig(endpoint)
+	g.configMu.Lock()
+	defer g.configMu.Unlock()
+	g.endpoints[endpoint.ID] = endpoint
+}
+
+func (g *Gateway) removeCachedEndpoint(id string) {
+	g.configMu.Lock()
+	defer g.configMu.Unlock()
+	delete(g.endpoints, strings.TrimSpace(id))
+}
+
+func (g *Gateway) cachedAPIKey(id string) (config.APIKey, bool) {
+	g.configMu.RLock()
+	defer g.configMu.RUnlock()
+	key, ok := g.apiKeys[strings.TrimSpace(id)]
+	return cloneAPIKeyConfig(key), ok
+}
+
+func (g *Gateway) cachedAPIKeyByValue(value string) (config.APIKey, bool) {
+	g.configMu.RLock()
+	defer g.configMu.RUnlock()
+	key, ok := g.apiKeysByValue[strings.TrimSpace(value)]
+	return cloneAPIKeyConfig(key), ok
+}
+
+func (g *Gateway) cacheAPIKey(key config.APIKey) {
+	key = cloneAPIKeyConfig(key)
+	g.configMu.Lock()
+	defer g.configMu.Unlock()
+	if existing, ok := g.apiKeys[key.ID]; ok && existing.Value != key.Value {
+		delete(g.apiKeysByValue, existing.Value)
+	}
+	g.apiKeys[key.ID] = key
+	if key.Value != "" {
+		g.apiKeysByValue[key.Value] = key
+	}
+}
+
+func (g *Gateway) removeCachedAPIKey(id string) {
+	g.configMu.Lock()
+	defer g.configMu.Unlock()
+	if existing, ok := g.apiKeys[strings.TrimSpace(id)]; ok {
+		delete(g.apiKeysByValue, existing.Value)
+	}
+	delete(g.apiKeys, strings.TrimSpace(id))
+}
+
 func (g *Gateway) UpsertServer(ctx context.Context, server config.Server) error {
-	if existing, ok := g.store.Get(server.ID); ok {
+	if existing, ok := g.cachedServer(server.ID); ok {
 		if isAuthEmpty(server.Auth) {
 			server.Auth = existing.Auth
 		}
@@ -289,6 +483,10 @@ func (g *Gateway) UpsertServer(ctx context.Context, server config.Server) error 
 	if err := g.store.Upsert(server); err != nil {
 		return err
 	}
+	if stored, ok := g.store.Get(strings.TrimSpace(server.ID)); ok {
+		server = stored
+	}
+	g.cacheServer(server)
 	g.stopServer(server.ID)
 	if server.Enabled {
 		if err := g.startServer(ctx, server); err != nil {
@@ -302,7 +500,11 @@ func (g *Gateway) UpsertServer(ctx context.Context, server config.Server) error 
 func (g *Gateway) DeleteServer(id string) bool {
 	g.stopServer(id)
 	g.deleteUsage(serverUsageKey(id))
-	return g.store.Delete(id)
+	deleted := g.store.Delete(id)
+	if deleted {
+		g.removeCachedServer(id)
+	}
+	return deleted
 }
 
 func (g *Gateway) UpsertEndpoint(endpoint config.Endpoint) error {
@@ -313,16 +515,23 @@ func (g *Gateway) UpsertEndpoint(endpoint config.Endpoint) error {
 			continue
 		}
 		seen[serverID] = true
-		if _, ok := g.store.Get(serverID); !ok {
+		if _, ok := g.cachedServer(serverID); !ok {
 			return fmt.Errorf("server %q not found", serverID)
 		}
 	}
-	return g.store.UpsertEndpoint(endpoint)
+	if err := g.store.UpsertEndpoint(endpoint); err != nil {
+		return err
+	}
+	if stored, ok := g.store.GetEndpoint(strings.TrimSpace(endpoint.ID)); ok {
+		endpoint = stored
+	}
+	g.cacheEndpoint(endpoint)
+	return nil
 }
 
 func (g *Gateway) UpsertAPIKey(key config.APIKey) error {
 	if strings.TrimSpace(key.Value) == "" {
-		if existing, ok := g.store.GetAPIKey(strings.TrimSpace(key.ID)); ok {
+		if existing, ok := g.cachedAPIKey(strings.TrimSpace(key.ID)); ok {
 			key.Value = existing.Value
 		}
 	}
@@ -334,24 +543,39 @@ func (g *Gateway) UpsertAPIKey(key config.APIKey) error {
 			continue
 		}
 		seen[endpointID] = true
-		if _, ok := g.store.GetEndpoint(endpointID); !ok {
+		if _, ok := g.cachedEndpoint(endpointID); !ok {
 			return fmt.Errorf("endpoint %q not found", endpointID)
 		}
 	}
-	return g.store.UpsertAPIKey(key)
+	if err := g.store.UpsertAPIKey(key); err != nil {
+		return err
+	}
+	if stored, ok := g.store.GetAPIKey(strings.TrimSpace(key.ID)); ok {
+		key = stored
+	}
+	g.cacheAPIKey(key)
+	return nil
 }
 
 func (g *Gateway) DeleteEndpoint(id string) bool {
 	g.deleteUsage(endpointUsageKey(id))
-	return g.store.DeleteEndpoint(id)
+	deleted := g.store.DeleteEndpoint(id)
+	if deleted {
+		g.removeCachedEndpoint(id)
+	}
+	return deleted
 }
 
 func (g *Gateway) DeleteAPIKey(id string) bool {
-	return g.store.DeleteAPIKey(id)
+	deleted := g.store.DeleteAPIKey(id)
+	if deleted {
+		g.removeCachedAPIKey(id)
+	}
+	return deleted
 }
 
 func (g *Gateway) SetEndpointEnabled(id string, enabled bool) error {
-	endpoint, ok := g.store.GetEndpoint(id)
+	endpoint, ok := g.cachedEndpoint(id)
 	if !ok {
 		return errors.New("endpoint not found")
 	}
@@ -363,11 +587,13 @@ func (g *Gateway) SetEndpointEnabled(id string, enabled bool) error {
 	} else if !ok {
 		return errors.New("endpoint not found")
 	}
+	endpoint.Enabled = enabled
+	g.cacheEndpoint(endpoint)
 	return nil
 }
 
 func (g *Gateway) SetServerEnabled(ctx context.Context, id string, enabled bool) error {
-	server, ok := g.store.Get(id)
+	server, ok := g.cachedServer(id)
 	if !ok {
 		return errors.New("server not found")
 	}
@@ -382,6 +608,7 @@ func (g *Gateway) SetServerEnabled(ctx context.Context, id string, enabled bool)
 	}
 
 	server.Enabled = enabled
+	g.cacheServer(server)
 	if !enabled {
 		g.stopServer(id)
 		return nil
@@ -394,7 +621,7 @@ func (g *Gateway) SetServerEnabled(ctx context.Context, id string, enabled bool)
 }
 
 func (g *Gateway) RestartServer(ctx context.Context, id string) error {
-	server, ok := g.store.Get(id)
+	server, ok := g.cachedServer(id)
 	if !ok {
 		return errors.New("server not found")
 	}
@@ -411,7 +638,7 @@ func (g *Gateway) RestartServer(ctx context.Context, id string) error {
 }
 
 func (g *Gateway) TestServer(ctx context.Context, server config.Server) (TestResult, error) {
-	if existing, ok := g.store.Get(server.ID); ok {
+	if existing, ok := g.cachedServer(server.ID); ok {
 		if isAuthEmpty(server.Auth) {
 			server.Auth = existing.Auth
 		}
@@ -451,7 +678,7 @@ func (g *Gateway) TestServer(ctx context.Context, server config.Server) (TestRes
 }
 
 func (g *Gateway) TestStoredServer(ctx context.Context, id string) (TestResult, error) {
-	server, ok := g.store.Get(id)
+	server, ok := g.cachedServer(id)
 	if !ok {
 		return TestResult{OK: false, Status: "not_found"}, errors.New("server not found")
 	}
@@ -514,7 +741,7 @@ func (g *Gateway) RefreshTools(ctx context.Context) ([]Tool, error) {
 }
 
 func (g *Gateway) RefreshServerTools(ctx context.Context, id string) ([]Tool, error) {
-	server, ok := g.store.Get(id)
+	server, ok := g.cachedServer(id)
 	if !ok {
 		return nil, errors.New("server not found")
 	}
@@ -526,7 +753,7 @@ func (g *Gateway) RefreshServerTools(ctx context.Context, id string) ([]Tool, er
 }
 
 func (g *Gateway) EndpointTools(ctx context.Context, id string) ([]Tool, error) {
-	endpoint, ok := g.store.GetEndpoint(id)
+	endpoint, ok := g.cachedEndpoint(id)
 	if !ok {
 		return nil, errors.New("endpoint not found")
 	}
@@ -556,7 +783,7 @@ func (g *Gateway) CallTool(ctx context.Context, gatewayName string, args map[str
 }
 
 func (g *Gateway) CallEndpointTool(ctx context.Context, endpointID, gatewayName string, args map[string]any) (mcp.CallResult, error) {
-	endpoint, ok := g.store.GetEndpoint(endpointID)
+	endpoint, ok := g.cachedEndpoint(endpointID)
 	if !ok {
 		return mcp.CallResult{}, errors.New("endpoint not found")
 	}
@@ -572,7 +799,7 @@ func (g *Gateway) CallEndpointTool(ctx context.Context, endpointID, gatewayName 
 		return mcp.CallResult{}, fmt.Errorf("tool %q is not available on endpoint %q", gatewayName, endpoint.ID)
 	}
 
-	server, ok := g.store.Get(serverID)
+	server, ok := g.cachedServer(serverID)
 	if !ok {
 		return mcp.CallResult{}, fmt.Errorf("server %q not found", serverID)
 	}
@@ -625,7 +852,7 @@ func (g *Gateway) callListTools(ctx context.Context, args map[string]any) (mcp.C
 		return jsonTextResult(map[string]any{"tools": tools})
 	}
 
-	if _, ok := g.store.Get(serverID); !ok {
+	if _, ok := g.cachedServer(serverID); !ok {
 		return mcp.CallResult{}, fmt.Errorf("server %q not found", serverID)
 	}
 	tools = append(tools, g.cachedServerTools(serverID)...)
@@ -724,7 +951,7 @@ func (g *Gateway) callInvoke(ctx context.Context, args map[string]any) (mcp.Call
 }
 
 func (g *Gateway) callUpstreamTool(ctx context.Context, serverID, nativeName string, args map[string]any) (mcp.CallResult, error) {
-	server, ok := g.store.Get(serverID)
+	server, ok := g.cachedServer(serverID)
 	if !ok {
 		return mcp.CallResult{}, fmt.Errorf("server %q not found", serverID)
 	}
@@ -860,7 +1087,7 @@ func (g *Gateway) cachedEndpointTools(endpoint config.Endpoint) []Tool {
 	g.toolsMu.RLock()
 	defer g.toolsMu.RUnlock()
 	for _, serverID := range endpoint.ServerIDs {
-		server, ok := g.store.Get(serverID)
+		server, ok := g.cachedServer(serverID)
 		if !ok || !server.Enabled {
 			continue
 		}
@@ -1077,6 +1304,57 @@ func (g *Gateway) stopUsageFlusher() {
 	})
 }
 
+func (g *Gateway) writeAuditLogsLoop() {
+	defer close(g.auditLogDone)
+
+	for work := range g.auditLogQueue {
+		if work.flush != nil {
+			close(work.flush)
+			continue
+		}
+		if err := g.insertAuditLog(work.record); err != nil {
+			log.Printf("audit_log_insert_failed transport=%s endpoint=%s tool=%s error=%q", work.record.Transport, work.record.EndpointID, work.record.ToolName, err.Error())
+		}
+	}
+}
+
+func (g *Gateway) insertAuditLog(record config.AuditLogRecord) error {
+	var lastErr error
+	for attempt := 0; attempt < auditLogAttempts; attempt++ {
+		err := g.store.InsertAuditLog(record)
+		if err == nil {
+			return nil
+		}
+		if !isSQLiteBusy(err) {
+			return err
+		}
+		lastErr = err
+		time.Sleep(time.Duration(attempt+1) * 5 * time.Millisecond)
+	}
+	return lastErr
+}
+
+func (g *Gateway) stopAuditLogWriter() {
+	g.auditLogStopOnce.Do(func() {
+		close(g.auditLogQueue)
+		<-g.auditLogDone
+	})
+}
+
+func (g *Gateway) flushAuditLogs() {
+	done := make(chan struct{})
+	g.auditLogQueue <- auditLogWork{flush: done}
+	<-done
+}
+
+func isSQLiteBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "SQLITE_BUSY") || strings.Contains(message, "database is locked")
+}
+
 func (g *Gateway) flushUsage() {
 	records := map[string]config.UsageRecord{}
 
@@ -1097,6 +1375,24 @@ func (g *Gateway) flushUsage() {
 			}
 			g.usageMu.Unlock()
 		}
+	}
+}
+
+func auditLogFromRecord(record config.AuditLogRecord) AuditLog {
+	timestamp := ""
+	if !record.Timestamp.IsZero() {
+		timestamp = record.Timestamp.UTC().Format(time.RFC3339Nano)
+	}
+	return AuditLog{
+		ID:         record.ID,
+		Timestamp:  timestamp,
+		Transport:  record.Transport,
+		EndpointID: record.EndpointID,
+		ToolName:   record.ToolName,
+		Status:     record.Status,
+		DurationMS: record.DurationMS,
+		Caller:     record.Caller,
+		Error:      record.Error,
 	}
 }
 
@@ -1157,6 +1453,34 @@ func cloneRawMessage(value json.RawMessage) json.RawMessage {
 		return nil
 	}
 	return append(json.RawMessage(nil), value...)
+}
+
+func cloneServerConfig(server config.Server) config.Server {
+	server.Args = append([]string(nil), server.Args...)
+	server.Env = cloneStringMap(server.Env)
+	server.Headers = cloneStringMap(server.Headers)
+	return server
+}
+
+func cloneEndpointConfig(endpoint config.Endpoint) config.Endpoint {
+	endpoint.ServerIDs = append([]string(nil), endpoint.ServerIDs...)
+	return endpoint
+}
+
+func cloneAPIKeyConfig(key config.APIKey) config.APIKey {
+	key.EndpointIDs = append([]string(nil), key.EndpointIDs...)
+	return key
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
 }
 
 func sanitizeServer(server config.Server) config.Server {

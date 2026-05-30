@@ -5,11 +5,14 @@ info:
   description: REST admin API and MCP JSON-RPC HTTP endpoints for MCP Gateway.
 servers:
   - url: http://localhost:8080
+security:
+  - bearerAuth: []
 paths:
   /healthz:
     get:
       operationId: getHealth
       summary: Check service health
+      security: []
       responses:
         "200":
           description: Gateway is healthy.
@@ -17,6 +20,64 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthResponse"
+  /api/auth/login:
+    post:
+      operationId: login
+      summary: Authenticate an admin user
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Authenticated session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSessionResponse"
+        "401":
+          $ref: "#/components/responses/RestError"
+  /api/auth/me:
+    get:
+      operationId: getCurrentUser
+      summary: Get the authenticated user
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeResponse"
+        "401":
+          $ref: "#/components/responses/RestError"
+  /api/auth/password:
+    post:
+      operationId: changePassword
+      summary: Change the authenticated user's password
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangePasswordRequest"
+      responses:
+        "200":
+          description: Password changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OKResponse"
+        "400":
+          $ref: "#/components/responses/RestError"
+        "401":
+          $ref: "#/components/responses/RestError"
   /api/config:
     get:
       operationId: getConfig
@@ -270,6 +331,8 @@ paths:
     get:
       operationId: listEndpointTools
       summary: List tools exposed by a scoped MCP endpoint
+      security:
+        - clientApiKey: []
       parameters:
         - $ref: "#/components/parameters/ID"
       responses:
@@ -287,6 +350,8 @@ paths:
     post:
       operationId: callEndpointTool
       summary: Call a tool through a scoped MCP endpoint
+      security:
+        - clientApiKey: []
       parameters:
         - $ref: "#/components/parameters/ID"
         - $ref: "#/components/parameters/ToolName"
@@ -403,10 +468,33 @@ paths:
       responses:
         "410":
           $ref: "#/components/responses/RestError"
+  /api/audit-logs:
+    get:
+      operationId: listAuditLogs
+      summary: List recent audit log entries
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        "200":
+          description: Recent audit log entries.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditLogsResponse"
+        "400":
+          $ref: "#/components/responses/RestError"
   /mcp:
     post:
       operationId: mcpGlobal
       summary: MCP JSON-RPC endpoint without endpoint-scoped tool calls
+      security: []
       requestBody:
         required: true
         content:
@@ -432,6 +520,7 @@ paths:
     post:
       operationId: mcpEndpoint
       summary: Endpoint-scoped MCP JSON-RPC endpoint
+      security: []
       parameters:
         - $ref: "#/components/parameters/EndpointID"
       requestBody:
@@ -456,6 +545,15 @@ paths:
               schema:
                 $ref: "#/components/schemas/JsonRpcResponse"
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    clientApiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
   parameters:
     ID:
       name: id
@@ -543,6 +641,57 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/APIKeyStatus"
+    AuditLog:
+      type: object
+      required:
+        - id
+        - timestamp
+        - transport
+        - status
+        - durationMs
+      properties:
+        id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        transport:
+          type: string
+          enum:
+            - rest
+            - mcp
+        endpointId:
+          type: string
+        toolName:
+          type: string
+        status:
+          type: integer
+        durationMs:
+          type: integer
+          format: int64
+        caller:
+          type: string
+        error:
+          type: string
+    AuditLogsResponse:
+      type: object
+      required:
+        - auditLogs
+      properties:
+        auditLogs:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditLog"
+    AuthSessionResponse:
+      type: object
+      required:
+        - token
+        - user
+      properties:
+        token:
+          type: string
+        user:
+          $ref: "#/components/schemas/User"
     AuthConfig:
       type: object
       properties:
@@ -591,6 +740,16 @@ components:
         - path
       properties:
         path:
+          type: string
+    ChangePasswordRequest:
+      type: object
+      required:
+        - currentPassword
+        - newPassword
+      properties:
+        currentPassword:
+          type: string
+        newPassword:
           type: string
     Endpoint:
       type: object
@@ -654,6 +813,31 @@ components:
         timestamp:
           type: string
           format: date-time
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+    MeResponse:
+      type: object
+      required:
+        - user
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+    OKResponse:
+      type: object
+      required:
+        - ok
+      properties:
+        ok:
+          type: boolean
     InitializeResult:
       type: object
       required:
@@ -877,6 +1061,21 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Tool"
+    User:
+      type: object
+      required:
+        - id
+        - email
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+          format: email
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
     ToolsErrorResponse:
       type: object
       required:

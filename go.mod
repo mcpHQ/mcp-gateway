@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/oapi-codegen/oapi-codegen/v2 v2.7.0
 	github.com/oapi-codegen/runtime v1.4.1
+	golang.org/x/crypto v0.46.0
 	modernc.org/sqlite v1.50.1
 )
 

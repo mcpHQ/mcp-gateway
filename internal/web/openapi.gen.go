@@ -8,7 +8,31 @@ import (
 	"time"
 
 	"github.com/oapi-codegen/runtime"
+	openapi_types "github.com/oapi-codegen/runtime/types"
 )
+
+const (
+	BearerAuthScopes   bearerAuthContextKey   = "bearerAuth.Scopes"
+	ClientApiKeyScopes clientApiKeyContextKey = "clientApiKey.Scopes"
+)
+
+// Defines values for AuditLogTransport.
+const (
+	Mcp  AuditLogTransport = "mcp"
+	Rest AuditLogTransport = "rest"
+)
+
+// Valid indicates whether the value is a known member of the AuditLogTransport enum.
+func (e AuditLogTransport) Valid() bool {
+	switch e {
+	case Mcp:
+		return true
+	case Rest:
+		return true
+	default:
+		return false
+	}
+}
 
 // Defines values for AuthConfigApiKeyIn.
 const (
@@ -180,6 +204,27 @@ type APIKeysResponse struct {
 	ApiKeys []APIKeyStatus `json:"apiKeys"`
 }
 
+// AuditLog defines model for AuditLog.
+type AuditLog struct {
+	Caller     *string           `json:"caller,omitempty"`
+	DurationMs int64             `json:"durationMs"`
+	EndpointId *string           `json:"endpointId,omitempty"`
+	Error      *string           `json:"error,omitempty"`
+	Id         string            `json:"id"`
+	Status     int               `json:"status"`
+	Timestamp  time.Time         `json:"timestamp"`
+	ToolName   *string           `json:"toolName,omitempty"`
+	Transport  AuditLogTransport `json:"transport"`
+}
+
+// AuditLogTransport defines model for AuditLog.Transport.
+type AuditLogTransport string
+
+// AuditLogsResponse defines model for AuditLogsResponse.
+type AuditLogsResponse struct {
+	AuditLogs []AuditLog `json:"auditLogs"`
+}
+
 // AuthConfig defines model for AuthConfig.
 type AuthConfig struct {
 	ApiKeyIn    *AuthConfigApiKeyIn `json:"apiKeyIn,omitempty"`
@@ -197,6 +242,12 @@ type AuthConfigApiKeyIn string
 // AuthConfigType defines model for AuthConfig.Type.
 type AuthConfigType string
 
+// AuthSessionResponse defines model for AuthSessionResponse.
+type AuthSessionResponse struct {
+	Token string `json:"token"`
+	User  User   `json:"user"`
+}
+
 // CallToolRequest defines model for CallToolRequest.
 type CallToolRequest struct {
 	Arguments *map[string]interface{} `json:"arguments,omitempty"`
@@ -206,6 +257,12 @@ type CallToolRequest struct {
 type CallToolResult struct {
 	Content *[]map[string]interface{} `json:"content,omitempty"`
 	IsError *bool                     `json:"isError,omitempty"`
+}
+
+// ChangePasswordRequest defines model for ChangePasswordRequest.
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
 }
 
 // ConfigResponse defines model for ConfigResponse.
@@ -298,6 +355,22 @@ type JsonRpcResponse struct {
 
 // JsonRpcResponseJsonrpc defines model for JsonRpcResponse.Jsonrpc.
 type JsonRpcResponseJsonrpc string
+
+// LoginRequest defines model for LoginRequest.
+type LoginRequest struct {
+	Email    openapi_types.Email `json:"email"`
+	Password string              `json:"password"`
+}
+
+// MeResponse defines model for MeResponse.
+type MeResponse struct {
+	User User `json:"user"`
+}
+
+// OKResponse defines model for OKResponse.
+type OKResponse struct {
+	Ok bool `json:"ok"`
+}
 
 // RateLimit defines model for RateLimit.
 type RateLimit struct {
@@ -413,6 +486,14 @@ type UsageSnapshot struct {
 	WindowResetAt       *string `json:"windowResetAt,omitempty"`
 }
 
+// User defines model for User.
+type User struct {
+	CreatedAt *string             `json:"createdAt,omitempty"`
+	Email     openapi_types.Email `json:"email"`
+	Id        string              `json:"id"`
+	UpdatedAt *string             `json:"updatedAt,omitempty"`
+}
+
 // EndpointID defines model for EndpointID.
 type EndpointID = string
 
@@ -425,8 +506,25 @@ type ToolName = string
 // RestError defines model for RestError.
 type RestError = ErrorResponse
 
+// bearerAuthContextKey is the context key for bearerAuth security scheme
+type bearerAuthContextKey string
+
+// clientApiKeyContextKey is the context key for clientApiKey security scheme
+type clientApiKeyContextKey string
+
+// ListAuditLogsParams defines parameters for ListAuditLogs.
+type ListAuditLogsParams struct {
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // UpsertAPIKeyJSONRequestBody defines body for UpsertAPIKey for application/json ContentType.
 type UpsertAPIKeyJSONRequestBody = APIKey
+
+// LoginJSONRequestBody defines body for Login for application/json ContentType.
+type LoginJSONRequestBody = LoginRequest
+
+// ChangePasswordJSONRequestBody defines body for ChangePassword for application/json ContentType.
+type ChangePasswordJSONRequestBody = ChangePasswordRequest
 
 // UpsertEndpointJSONRequestBody defines body for UpsertEndpoint for application/json ContentType.
 type UpsertEndpointJSONRequestBody = Endpoint

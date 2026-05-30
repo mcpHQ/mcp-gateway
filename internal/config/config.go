@@ -62,6 +62,14 @@ type APIKey struct {
 	UpdatedAt   string   `json:"updatedAt,omitempty"`
 }
 
+type User struct {
+	ID           string `json:"id"`
+	Email        string `json:"email"`
+	PasswordHash string `json:"-"`
+	CreatedAt    string `json:"createdAt,omitempty"`
+	UpdatedAt    string `json:"updatedAt,omitempty"`
+}
+
 type RateLimit struct {
 	RequestsPerMinute int `json:"requestsPerMinute,omitempty"`
 }
@@ -97,6 +105,18 @@ type UsageRecord struct {
 	WindowCalls      int
 	LastCalledAt     time.Time
 	LastError        string
+}
+
+type AuditLogRecord struct {
+	ID         string
+	Timestamp  time.Time
+	Transport  string
+	EndpointID string
+	ToolName   string
+	Status     int
+	DurationMS int64
+	Caller     string
+	Error      string
 }
 
 type RateLimitBucketResult struct {
@@ -237,6 +257,69 @@ func (s *Store) GetAPIKey(id string) (APIKey, bool) {
 		return APIKey{}, false
 	}
 	return key, true
+}
+
+func (s *Store) GetAPIKeyByValue(value string) (APIKey, bool) {
+	row := s.db.QueryRow(`
+		SELECT id, name, value, endpoint_ids_json, enabled, created_at, updated_at
+		FROM api_keys
+		WHERE value = ?
+	`, strings.TrimSpace(value))
+	key, err := scanAPIKey(row)
+	if err != nil {
+		return APIKey{}, false
+	}
+	return key, true
+}
+
+func (s *Store) GetUserByEmail(email string) (User, bool) {
+	row := s.db.QueryRow(`
+		SELECT id, email, password_hash, created_at, updated_at
+		FROM users
+		WHERE lower(email) = lower(?)
+	`, strings.TrimSpace(email))
+	user, err := scanUser(row)
+	if err != nil {
+		return User{}, false
+	}
+	return user, true
+}
+
+func (s *Store) SeedUser(user User) error {
+	user.ID = strings.TrimSpace(user.ID)
+	user.Email = strings.ToLower(strings.TrimSpace(user.Email))
+	if user.ID == "" {
+		return errors.New("user id is required")
+	}
+	if user.Email == "" {
+		return errors.New("user email is required")
+	}
+	if strings.TrimSpace(user.PasswordHash) == "" {
+		return errors.New("user password hash is required")
+	}
+
+	_, err := s.db.Exec(`
+		INSERT INTO users (id, email, password_hash, updated_at)
+		VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(id) DO NOTHING
+	`, user.ID, user.Email, user.PasswordHash)
+	return err
+}
+
+func (s *Store) UpdateUserPasswordHash(id string, passwordHash string) (bool, error) {
+	result, err := s.db.Exec(`
+		UPDATE users
+		SET password_hash = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, passwordHash, strings.TrimSpace(id))
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return rows > 0, nil
 }
 
 func (s *Store) Upsert(server Server) error {
@@ -543,6 +626,70 @@ func (s *Store) UpsertUsageRecord(record UsageRecord) error {
 func (s *Store) DeleteUsageRecord(key string) error {
 	_, err := s.db.Exec(`DELETE FROM usage_counters WHERE usage_key = ?`, key)
 	return err
+}
+
+func (s *Store) InsertAuditLog(record AuditLogRecord) error {
+	if record.ID == "" {
+		return errors.New("audit log id is required")
+	}
+	if record.Timestamp.IsZero() {
+		record.Timestamp = time.Now().UTC()
+	}
+	record.Transport = strings.TrimSpace(record.Transport)
+	record.EndpointID = strings.TrimSpace(record.EndpointID)
+	record.ToolName = strings.TrimSpace(record.ToolName)
+	record.Caller = strings.TrimSpace(record.Caller)
+	record.Error = strings.TrimSpace(record.Error)
+
+	_, err := s.db.Exec(`
+		INSERT INTO audit_logs (
+			id, timestamp, transport, endpoint_id, tool_name, status, duration_ms, caller, error
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, record.ID, formatDBTime(record.Timestamp), record.Transport, record.EndpointID, record.ToolName, record.Status, record.DurationMS, record.Caller, record.Error)
+	return err
+}
+
+func (s *Store) ListAuditLogs(limit int) ([]AuditLogRecord, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+
+	rows, err := s.db.Query(`
+		SELECT id, timestamp, transport, endpoint_id, tool_name, status, duration_ms, caller, error
+		FROM audit_logs
+		ORDER BY timestamp DESC, id DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []AuditLogRecord
+	for rows.Next() {
+		var record AuditLogRecord
+		var timestamp string
+		if err := rows.Scan(
+			&record.ID,
+			&timestamp,
+			&record.Transport,
+			&record.EndpointID,
+			&record.ToolName,
+			&record.Status,
+			&record.DurationMS,
+			&record.Caller,
+			&record.Error,
+		); err != nil {
+			return nil, err
+		}
+		record.Timestamp = parseDBTime(timestamp)
+		records = append(records, record)
+	}
+	return records, rows.Err()
 }
 
 const tokenMicros int64 = 1_000_000
@@ -989,6 +1136,22 @@ func scanAPIKey(scanner rowScanner) (APIKey, error) {
 	}
 	normalizeAPIKey(&key)
 	return key, nil
+}
+
+func scanUser(scanner rowScanner) (User, error) {
+	var user User
+	err := scanner.Scan(
+		&user.ID,
+		&user.Email,
+		&user.PasswordHash,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+	if err != nil {
+		return User{}, err
+	}
+	user.Email = strings.ToLower(strings.TrimSpace(user.Email))
+	return user, nil
 }
 
 func Validate(server Server) error {

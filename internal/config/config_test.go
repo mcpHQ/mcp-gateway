@@ -32,11 +32,58 @@ func TestLoadStoreAppliesMigrationsIdempotently(t *testing.T) {
 		t.Fatal("expected at least one applied migration")
 	}
 
-	for _, table := range []string{"servers", "endpoints", "api_keys", "tool_cache", "usage_counters", "rate_limit_buckets"} {
+	for _, table := range []string{"servers", "endpoints", "api_keys", "tool_cache", "usage_counters", "rate_limit_buckets", "audit_logs"} {
 		var name string
 		if err := store.db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name); err != nil {
 			t.Fatalf("expected table %s: %v", table, err)
 		}
+	}
+}
+
+func TestAuditLogsInsertAndListRecentFirst(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	older := AuditLogRecord{
+		ID:         "audit-old",
+		Timestamp:  time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC),
+		Transport:  "rest",
+		EndpointID: "dev",
+		ToolName:   "test__alpha",
+		Status:     200,
+		DurationMS: 12,
+		Caller:     "admin@example.com",
+	}
+	newer := AuditLogRecord{
+		ID:         "audit-new",
+		Timestamp:  older.Timestamp.Add(time.Minute),
+		Transport:  "mcp",
+		EndpointID: "dev",
+		ToolName:   "test__beta",
+		Status:     502,
+		DurationMS: 34,
+		Caller:     "127.0.0.1",
+		Error:      "upstream failed",
+	}
+	if err := store.InsertAuditLog(older); err != nil {
+		t.Fatalf("insert older audit log: %v", err)
+	}
+	if err := store.InsertAuditLog(newer); err != nil {
+		t.Fatalf("insert newer audit log: %v", err)
+	}
+
+	logs, err := store.ListAuditLogs(10)
+	if err != nil {
+		t.Fatalf("list audit logs: %v", err)
+	}
+	if len(logs) != 2 {
+		t.Fatalf("expected 2 audit logs, got %d", len(logs))
+	}
+	if logs[0].ID != newer.ID || logs[1].ID != older.ID {
+		t.Fatalf("expected newest first, got %#v", logs)
+	}
+	if logs[0].Error != newer.Error || logs[0].DurationMS != newer.DurationMS {
+		t.Fatalf("newer audit log fields were not preserved: %#v", logs[0])
 	}
 }
 

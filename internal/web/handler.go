@@ -2,15 +2,21 @@ package web
 
 import (
 	"context"
+	"crypto/rand"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/rajdas/mcp-gateway/internal/auth"
 	"github.com/rajdas/mcp-gateway/internal/config"
 	"github.com/rajdas/mcp-gateway/internal/gateway"
 )
@@ -19,16 +25,54 @@ import (
 var staticFS embed.FS
 
 type handler struct {
-	gw *gateway.Gateway
+	gw   *gateway.Gateway
+	auth *auth.Service
 }
 
 type apiError = ErrorResponse
 
-func NewHandler(gw *gateway.Gateway) http.Handler {
-	h := &handler{gw: gw}
+type authContextKey struct{}
+
+type apiKeyContextKey struct{}
+
+type loginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type changePasswordRequest struct {
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
+}
+
+type authUserResponse struct {
+	ID        string `json:"id"`
+	Email     string `json:"email"`
+	CreatedAt string `json:"createdAt,omitempty"`
+	UpdatedAt string `json:"updatedAt,omitempty"`
+}
+
+type authSessionResponse struct {
+	Token string           `json:"token"`
+	User  authUserResponse `json:"user"`
+}
+
+type meResponse struct {
+	User authUserResponse `json:"user"`
+}
+
+func NewHandler(gw *gateway.Gateway, authServices ...*auth.Service) http.Handler {
+	var authService *auth.Service
+	if len(authServices) > 0 {
+		authService = authServices[0]
+	}
+	h := &handler{gw: gw, auth: authService}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", h.health)
+	mux.HandleFunc("POST /api/auth/login", h.login)
+	mux.HandleFunc("GET /api/auth/me", h.me)
+	mux.HandleFunc("POST /api/auth/password", h.changePassword)
 	mux.HandleFunc("GET /api/config", h.config)
 	mux.HandleFunc("GET /api/servers", h.servers)
 	mux.HandleFunc("POST /api/servers", h.upsertServer)
@@ -52,12 +96,13 @@ func NewHandler(gw *gateway.Gateway) http.Handler {
 	mux.HandleFunc("GET /api/tools", h.tools)
 	mux.HandleFunc("POST /api/tools/refresh", h.refreshTools)
 	mux.HandleFunc("POST /api/tools/{name}/call", h.callTool)
+	mux.HandleFunc("GET /api/audit-logs", h.auditLogs)
 	mux.HandleFunc("POST /mcp/{endpointId}", h.mcpEndpoint)
 	mux.HandleFunc("POST /mcp", h.mcp)
 
 	files, _ := fs.Sub(staticFS, "static")
 	mux.Handle("/", withStaticCache(http.FileServer(http.FS(files))))
-	return withCORS(withLogging(mux))
+	return withCORS(withLogging(h.withAuth(mux)))
 }
 
 func (h *handler) health(w http.ResponseWriter, r *http.Request) {
@@ -67,8 +112,75 @@ func (h *handler) health(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func userResponseFromConfig(user config.User) authUserResponse {
+	return authUserResponse{
+		ID:        user.ID,
+		Email:     user.Email,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+	}
+}
+
 func (h *handler) config(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ConfigResponse{Path: h.gw.ConfigPath()})
+}
+
+func (h *handler) login(w http.ResponseWriter, r *http.Request) {
+	if h.auth == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("auth is not configured"))
+		return
+	}
+
+	var body loginRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	session, err := h.auth.Login(body.Email, body.Password)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, authSessionResponse{
+		Token: session.Token,
+		User:  userResponseFromConfig(session.User),
+	})
+}
+
+func (h *handler) me(w http.ResponseWriter, r *http.Request) {
+	if h.auth == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("auth is not configured"))
+		return
+	}
+	user, err := h.userFromRequest(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, meResponse{User: userResponseFromConfig(user)})
+}
+
+func (h *handler) changePassword(w http.ResponseWriter, r *http.Request) {
+	if h.auth == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("auth is not configured"))
+		return
+	}
+	user, err := h.userFromRequest(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+
+	var body changePasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := h.auth.ChangePassword(user.Email, body.CurrentPassword, body.NewPassword); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (h *handler) servers(w http.ResponseWriter, r *http.Request) {
@@ -238,7 +350,13 @@ func (h *handler) disableEndpoint(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) endpointTools(w http.ResponseWriter, r *http.Request) {
-	tools, err := h.gw.EndpointTools(r.Context(), r.PathValue("id"))
+	endpointID := r.PathValue("id")
+	r, err := h.requireClientAPIKey(w, r, endpointID)
+	if err != nil {
+		return
+	}
+
+	tools, err := h.gw.EndpointTools(r.Context(), endpointID)
 	if err != nil {
 		writeError(w, statusForGatewayError(err), err)
 		return
@@ -277,13 +395,39 @@ func (h *handler) callTool(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusGone, errors.New("tool calls must use an endpoint route: /api/endpoints/{id}/tools/{name}/call"))
 }
 
+func (h *handler) auditLogs(w http.ResponseWriter, r *http.Request) {
+	limit := 100
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			writeError(w, http.StatusBadRequest, errors.New("limit must be a positive integer"))
+			return
+		}
+		limit = parsed
+	}
+
+	logs, err := h.gw.AuditLogs(limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"auditLogs": logs})
+}
+
 func (h *handler) callEndpointTool(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	endpointID := r.PathValue("id")
 	toolName := r.PathValue("name")
+	var err error
+	r, err = h.requireClientAPIKey(w, r, endpointID)
+	if err != nil {
+		return
+	}
 	var body CallToolRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		logToolCall("rest", endpointID, toolName, http.StatusBadRequest, time.Since(start), err)
+		duration := time.Since(start)
+		annotateToolCallAccessLog(r, "rest", endpointID, toolName, err)
+		h.recordAuditLog(r, "rest", endpointID, toolName, http.StatusBadRequest, duration, err)
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -295,11 +439,15 @@ func (h *handler) callEndpointTool(w http.ResponseWriter, r *http.Request) {
 	result, err := h.gw.CallEndpointTool(r.Context(), endpointID, toolName, arguments)
 	if err != nil {
 		status := statusForToolCallError(err)
-		logToolCall("rest", endpointID, toolName, status, time.Since(start), err)
+		duration := time.Since(start)
+		annotateToolCallAccessLog(r, "rest", endpointID, toolName, err)
+		h.recordAuditLog(r, "rest", endpointID, toolName, status, duration, err)
 		writeError(w, status, err)
 		return
 	}
-	logToolCall("rest", endpointID, toolName, http.StatusOK, time.Since(start), nil)
+	duration := time.Since(start)
+	annotateToolCallAccessLog(r, "rest", endpointID, toolName, nil)
+	h.recordAuditLog(r, "rest", endpointID, toolName, http.StatusOK, duration, nil)
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -348,6 +496,7 @@ func (h *handler) mcpRPC(w http.ResponseWriter, r *http.Request, endpointID stri
 	case "tools/call":
 		start := time.Now()
 		if endpointID == "" {
+			h.recordAuditLog(r, "mcp", endpointID, "", http.StatusBadRequest, time.Since(start), errors.New("tool calls must use an endpoint route: /mcp/{endpointId}"))
 			writeJSON(w, http.StatusOK, rpcError(req.ID, -32000, "tool calls must use an endpoint route: /mcp/{endpointId}"))
 			return
 		}
@@ -360,15 +509,99 @@ func (h *handler) mcpRPC(w http.ResponseWriter, r *http.Request, endpointID stri
 		}
 		result, err := h.gw.CallEndpointTool(r.Context(), endpointID, params.Name, params.Arguments)
 		if err != nil {
-			logToolCall("mcp", endpointID, params.Name, http.StatusOK, time.Since(start), err)
+			duration := time.Since(start)
+			status := statusForToolCallError(err)
+			annotateToolCallAccessLog(r, "mcp", endpointID, params.Name, err)
+			h.recordAuditLog(r, "mcp", endpointID, params.Name, status, duration, err)
 			writeJSON(w, http.StatusOK, rpcError(req.ID, -32000, err.Error()))
 			return
 		}
-		logToolCall("mcp", endpointID, params.Name, http.StatusOK, time.Since(start), nil)
+		duration := time.Since(start)
+		annotateToolCallAccessLog(r, "mcp", endpointID, params.Name, nil)
+		h.recordAuditLog(r, "mcp", endpointID, params.Name, http.StatusOK, duration, nil)
 		writeJSON(w, http.StatusOK, rpcResult(req.ID, result))
 	default:
 		writeJSON(w, http.StatusOK, rpcError(req.ID, -32601, "method not found"))
 	}
+}
+
+func (h *handler) recordAuditLog(r *http.Request, transport, endpointID, toolName string, status int, duration time.Duration, err error) {
+	if h.gw == nil {
+		return
+	}
+	message := ""
+	if err != nil {
+		message = err.Error()
+	}
+	record := config.AuditLogRecord{
+		ID:         newAuditLogID(),
+		Timestamp:  time.Now().UTC(),
+		Transport:  transport,
+		EndpointID: endpointID,
+		ToolName:   toolName,
+		Status:     status,
+		DurationMS: duration.Milliseconds(),
+		Caller:     callerForRequest(r),
+		Error:      message,
+	}
+	if auditErr := h.gw.RecordAuditLog(record); auditErr != nil {
+		log.Printf("audit_log_enqueue_failed transport=%s endpoint=%s tool=%s error=%q", transport, endpointID, toolName, auditErr.Error())
+	}
+}
+
+func newAuditLogID() string {
+	var bytes [16]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return "audit_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return "audit_" + hex.EncodeToString(bytes[:])
+}
+
+func callerForRequest(r *http.Request) string {
+	if key, ok := r.Context().Value(apiKeyContextKey{}).(config.APIKey); ok && key.ID != "" {
+		if key.Name != "" {
+			return "apikey:" + key.Name
+		}
+		return "apikey:" + key.ID
+	}
+	if user, ok := r.Context().Value(authContextKey{}).(config.User); ok && user.Email != "" {
+		return user.Email
+	}
+	if r.RemoteAddr != "" {
+		return r.RemoteAddr
+	}
+	return "unknown"
+}
+
+func isEndpointClientRoute(r *http.Request) bool {
+	if r.Method == http.MethodOptions {
+		return false
+	}
+	path := r.URL.Path
+	if !strings.HasPrefix(path, "/api/endpoints/") {
+		return false
+	}
+	if r.Method == http.MethodGet && strings.HasSuffix(path, "/tools") {
+		return true
+	}
+	return r.Method == http.MethodPost && strings.Contains(path, "/tools/") && strings.HasSuffix(path, "/call")
+}
+
+func clientAPIKeyFromRequest(r *http.Request) string {
+	return strings.TrimSpace(r.Header.Get("X-API-Key"))
+}
+
+func (h *handler) requireClientAPIKey(w http.ResponseWriter, r *http.Request, endpointID string) (*http.Request, error) {
+	key, err := h.gw.AuthorizeEndpointAPIKey(endpointID, clientAPIKeyFromRequest(r))
+	if err != nil {
+		status := http.StatusUnauthorized
+		if err.Error() == "api key not authorized for endpoint" {
+			status = http.StatusForbidden
+		}
+		writeError(w, status, err)
+		return r, err
+	}
+	return r.WithContext(context.WithValue(r.Context(), apiKeyContextKey{}, key)), nil
 }
 
 type rpcRequest struct {
@@ -432,10 +665,46 @@ func statusForToolCallError(err error) int {
 	return http.StatusBadGateway
 }
 
+func (h *handler) withAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h.auth == nil || !requiresAuth(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		user, err := h.auth.UserFromToken(auth.BearerToken(r.Header.Get("Authorization")))
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, errors.New("unauthorized"))
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), authContextKey{}, user)))
+	})
+}
+
+func requiresAuth(r *http.Request) bool {
+	if isEndpointClientRoute(r) {
+		return false
+	}
+	if r.Method == http.MethodOptions {
+		return false
+	}
+	if !strings.HasPrefix(r.URL.Path, "/api/") {
+		return false
+	}
+	return r.URL.Path != "/api/auth/login"
+}
+
+func (h *handler) userFromRequest(r *http.Request) (config.User, error) {
+	if user, ok := r.Context().Value(authContextKey{}).(config.User); ok {
+		return user, nil
+	}
+	return h.auth.UserFromToken(auth.BearerToken(r.Header.Get("Authorization")))
+}
+
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-API-Key")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -456,6 +725,15 @@ func withStaticCache(next http.Handler) http.Handler {
 	})
 }
 
+type accessLogContextKey struct{}
+
+type accessLogExtras struct {
+	Transport     string
+	EndpointID    string
+	ToolName      string
+	UpstreamError string
+}
+
 func withLogging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/api/") && !strings.HasPrefix(r.URL.Path, "/mcp") {
@@ -464,22 +742,18 @@ func withLogging(next http.Handler) http.Handler {
 		}
 
 		start := time.Now()
+		extras := &accessLogExtras{}
+		r = r.WithContext(context.WithValue(r.Context(), accessLogContextKey{}, extras))
 		recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(recorder, r)
-		log.Printf(
-			"request method=%s path=%s status=%d duration=%s remote=%s",
-			r.Method,
-			r.URL.Path,
-			recorder.status,
-			time.Since(start).Round(time.Microsecond),
-			r.RemoteAddr,
-		)
+		logAccess(r, recorder, time.Since(start), extras)
 	})
 }
 
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
+	bytes  int
 }
 
 func (r *statusRecorder) WriteHeader(status int) {
@@ -487,25 +761,63 @@ func (r *statusRecorder) WriteHeader(status int) {
 	r.ResponseWriter.WriteHeader(status)
 }
 
-func logToolCall(transport, endpointID, toolName string, status int, duration time.Duration, err error) {
-	if err != nil {
-		log.Printf(
-			"tool_call transport=%s endpoint=%s tool=%s status=%d duration=%s error=%q",
-			transport,
-			endpointID,
-			toolName,
-			status,
-			duration.Round(time.Microsecond),
-			err.Error(),
-		)
+func (r *statusRecorder) Write(b []byte) (int, error) {
+	n, err := r.ResponseWriter.Write(b)
+	r.bytes += n
+	return n, err
+}
+
+func annotateToolCallAccessLog(r *http.Request, transport, endpointID, toolName string, err error) {
+	extras, ok := r.Context().Value(accessLogContextKey{}).(*accessLogExtras)
+	if !ok || extras == nil {
 		return
 	}
-	log.Printf(
-		"tool_call transport=%s endpoint=%s tool=%s status=%d duration=%s",
-		transport,
-		endpointID,
-		toolName,
-		status,
-		duration.Round(time.Microsecond),
+	extras.Transport = transport
+	extras.EndpointID = endpointID
+	extras.ToolName = toolName
+	if err != nil {
+		extras.UpstreamError = err.Error()
+	}
+}
+
+func logAccess(r *http.Request, recorder *statusRecorder, duration time.Duration, extras *accessLogExtras) {
+	caller := callerForRequest(r)
+	if caller == r.RemoteAddr {
+		caller = "-"
+	}
+
+	line := fmt.Sprintf(
+		`%s - %s [%s] "%s %s %s" %d %d %.3f`,
+		clientIP(r.RemoteAddr),
+		caller,
+		time.Now().Format("02/Jan/2006:15:04:05 -0700"),
+		r.Method,
+		r.URL.RequestURI(),
+		r.Proto,
+		recorder.status,
+		recorder.bytes,
+		duration.Seconds(),
 	)
+
+	if extras != nil && extras.Transport != "" {
+		line += fmt.Sprintf(
+			` transport=%s endpoint=%s tool=%s`,
+			extras.Transport,
+			extras.EndpointID,
+			extras.ToolName,
+		)
+		if extras.UpstreamError != "" {
+			line += fmt.Sprintf(` error=%q`, extras.UpstreamError)
+		}
+	}
+
+	log.Print(line)
+}
+
+func clientIP(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return remoteAddr
+	}
+	return host
 }

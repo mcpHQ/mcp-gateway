@@ -6,7 +6,19 @@ import "./style.css";
 
 const gatewayToolsCount = 5;
 const preferencesStorageKey = "mcp-gateway-preferences";
-const views = ["overview", "servers", "endpoints", "api-keys", "tools", "settings"];
+const authTokenStorageKey = "mcp-gateway-auth-token";
+const views = ["overview", "servers", "endpoints", "api-keys", "tools", "audit-log", "settings", "profile"];
+
+const initialLoginForm = {
+  email: "admin@mcphq.org",
+  password: "",
+};
+
+const initialPasswordForm = {
+  currentPassword: "",
+  newPassword: "",
+  confirmPassword: "",
+};
 
 const initialForm = {
   presetId: "custom-http",
@@ -88,6 +100,16 @@ const tableColumns = {
     { id: "createdAt", labelKey: "table.createdAt", width: "minmax(9rem, 0.75fr)" },
     { id: "updatedAt", labelKey: "table.updatedAt", width: "minmax(9rem, 0.75fr)" },
   ],
+  auditLogs: [
+    { id: "timestamp", labelKey: "table.timestamp", width: "minmax(10rem, 0.85fr)" },
+    { id: "transport", labelKey: "table.transport", width: "minmax(7rem, 0.55fr)" },
+    { id: "endpoint", labelKey: "unit.endpoint.one", width: "minmax(10rem, 0.75fr)" },
+    { id: "tool", labelKey: "unit.tool.one", width: "minmax(14rem, 1.2fr)" },
+    { id: "status", labelKey: "common.status", width: "minmax(7rem, 0.55fr)" },
+    { id: "duration", labelKey: "table.duration", width: "minmax(7rem, 0.55fr)" },
+    { id: "caller", labelKey: "table.caller", width: "minmax(12rem, 0.9fr)" },
+    { id: "error", labelKey: "table.error", width: "minmax(16rem, 1.3fr)" },
+  ],
 };
 
 const actionColumnWidth = "minmax(8rem, 0.5fr)";
@@ -154,6 +176,25 @@ const tableFilterFields = {
       dynamicOptions: true,
     },
   ],
+  auditLogs: [
+    {
+      id: "transport",
+      labelKey: "table.transport",
+      options: [
+        { value: "rest", labelKey: "audit.transportRest" },
+        { value: "mcp", labelKey: "audit.transportMcp" },
+      ],
+    },
+    {
+      id: "status",
+      labelKey: "common.status",
+      options: [
+        { value: "success", labelKey: "common.ok" },
+        { value: "failed", labelKey: "common.failed" },
+        { value: "limited", labelKey: "common.limited" },
+      ],
+    },
+  ],
 };
 
 const emptyTableFilters = {
@@ -161,6 +202,7 @@ const emptyTableFilters = {
   endpoints: [],
   apiKeys: [],
   tools: [],
+  auditLogs: [],
 };
 
 function parseStrings(source) {
@@ -219,13 +261,24 @@ function initialPreferences() {
 }
 
 async function api(path, options = {}) {
+  const token = localStorage.getItem(authTokenStorageKey);
+  const headers = {
+    "Content-Type": "application/json",
+    ...(options.headers || {}),
+  };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
   const response = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
     ...options,
+    headers,
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload.error || t("error.requestFailed", { status: response.status }));
+    const error = new Error(payload.error || t("error.requestFailed", { status: response.status }));
+    error.status = response.status;
+    throw error;
   }
   return payload;
 }
@@ -406,6 +459,12 @@ function formatTimestamp(value) {
   }).format(timestamp);
 }
 
+function formatDuration(ms) {
+  const value = Number(ms || 0);
+  if (value < 1000) return `${value}ms`;
+  return `${(value / 1000).toFixed(2)}s`;
+}
+
 function timestampValue(value) {
   if (!value) return 0;
   const normalized = value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
@@ -416,6 +475,11 @@ function timestampValue(value) {
 function sortByUpdatedAt(items, enabled) {
   if (!enabled) return items;
   return [...items].sort((a, b) => timestampValue(b.updatedAt) - timestampValue(a.updatedAt));
+}
+
+function sortByTimestamp(items, enabled) {
+  if (!enabled) return items;
+  return [...items].sort((a, b) => timestampValue(b.timestamp) - timestampValue(a.timestamp));
 }
 
 function visibleColumnIds(preferences, tableId) {
@@ -487,6 +551,16 @@ function matchesTableFilter(tableId, item, filter, context = {}) {
         return item.serverId === filter.value;
       }
       return true;
+    case "auditLogs":
+      if (filter.field === "transport") {
+        return item.transport === filter.value;
+      }
+      if (filter.field === "status") {
+        if (filter.value === "success") return item.status >= 200 && item.status < 300;
+        if (filter.value === "limited") return item.status === 429;
+        return item.status >= 400;
+      }
+      return true;
     default:
       return true;
   }
@@ -555,11 +629,18 @@ function presetDescription(preset) {
 }
 
 function App() {
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authUser, setAuthUser] = useState(null);
+  const [loginForm, setLoginForm] = useState(initialLoginForm);
+  const [loggingIn, setLoggingIn] = useState(false);
+  const [passwordForm, setPasswordForm] = useState(initialPasswordForm);
+  const [savingPassword, setSavingPassword] = useState(false);
   const [configPath, setConfigPath] = useState(t("common.loadingInitial"));
   const [servers, setServers] = useState([]);
   const [endpoints, setEndpoints] = useState([]);
   const [apiKeys, setAPIKeys] = useState([]);
   const [tools, setTools] = useState([]);
+  const [auditLogs, setAuditLogs] = useState([]);
   const [form, setForm] = useState(initialForm);
   const [endpointForm, setEndpointForm] = useState(initialEndpointForm);
   const [apiKeyForm, setAPIKeyForm] = useState(initialAPIKeyForm);
@@ -573,19 +654,24 @@ function App() {
   const [endpointSearch, setEndpointSearch] = useState("");
   const [apiKeySearch, setAPIKeySearch] = useState("");
   const [toolSearch, setToolSearch] = useState("");
+  const [auditLogSearch, setAuditLogSearch] = useState("");
   const [serverPage, setServerPage] = useState(1);
   const [endpointPage, setEndpointPage] = useState(1);
   const [apiKeyPage, setAPIKeyPage] = useState(1);
   const [toolPage, setToolPage] = useState(1);
+  const [auditLogPage, setAuditLogPage] = useState(1);
   const [serverPageSize, setServerPageSize] = useState(5);
   const [endpointPageSize, setEndpointPageSize] = useState(5);
   const [apiKeyPageSize, setAPIKeyPageSize] = useState(5);
   const [toolPageSize, setToolPageSize] = useState(5);
+  const [auditLogPageSize, setAuditLogPageSize] = useState(10);
   const [loadingServers, setLoadingServers] = useState(false);
   const [loadingEndpoints, setLoadingEndpoints] = useState(false);
   const [loadingAPIKeys, setLoadingAPIKeys] = useState(false);
   const [loadingTools, setLoadingTools] = useState(false);
+  const [loadingAuditLogs, setLoadingAuditLogs] = useState(false);
   const [toolsLoaded, setToolsLoaded] = useState(false);
+  const [auditLogsLoaded, setAuditLogsLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savingEndpoint, setSavingEndpoint] = useState(false);
   const [savingAPIKey, setSavingAPIKey] = useState(false);
@@ -616,8 +702,77 @@ function App() {
     setPendingApiRequests((count) => count + 1);
     try {
       return await api(path, options);
+    } catch (error) {
+      if (error.status === 401 && path !== "/api/auth/login") {
+        localStorage.removeItem(authTokenStorageKey);
+        setAuthUser(null);
+      }
+      throw error;
     } finally {
       setPendingApiRequests((count) => Math.max(0, count - 1));
+    }
+  }
+
+  function storeSession(payload) {
+    localStorage.setItem(authTokenStorageKey, payload.token);
+    setAuthUser(payload.user);
+  }
+
+  function clearSession() {
+    localStorage.removeItem(authTokenStorageKey);
+    setAuthUser(null);
+    setLoginForm(initialLoginForm);
+    setToolsLoaded(false);
+    setAuditLogsLoaded(false);
+    setAuditLogs([]);
+  }
+
+  async function login(event) {
+    event.preventDefault();
+    setLoggingIn(true);
+    try {
+      const payload = await request("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify(loginForm),
+      });
+      storeSession(payload);
+      setLoginForm((current) => ({ ...current, password: "" }));
+      notify(t("toast.loginSuccess"), payload.user?.email || "", "success");
+    } catch (error) {
+      notify(t("toast.loginFailed"), error.message, "error");
+    } finally {
+      setLoggingIn(false);
+    }
+  }
+
+  function logout() {
+    clearSession();
+    setActiveView("overview");
+    notify(t("toast.loggedOut"), "", "warning");
+  }
+
+  async function changePassword(event) {
+    event.preventDefault();
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      notify(t("toast.passwordMismatch"), t("toast.passwordMismatchMessage"), "error");
+      return;
+    }
+
+    setSavingPassword(true);
+    try {
+      await request("/api/auth/password", {
+        method: "POST",
+        body: JSON.stringify({
+          currentPassword: passwordForm.currentPassword,
+          newPassword: passwordForm.newPassword,
+        }),
+      });
+      setPasswordForm(initialPasswordForm);
+      notify(t("toast.passwordChanged"), t("toast.passwordChangedMessage"));
+    } catch (error) {
+      notify(t("toast.passwordChangeFailed"), error.message, "error");
+    } finally {
+      setSavingPassword(false);
     }
   }
 
@@ -714,18 +869,68 @@ function App() {
     }
   }
 
+  async function loadAuditLogs(showToast = false) {
+    if (inflightLoads.current.auditLogs) return inflightLoads.current.auditLogs;
+
+    setLoadingAuditLogs(true);
+    inflightLoads.current.auditLogs = (async () => {
+      const payload = await request("/api/audit-logs?limit=500");
+      setAuditLogs(payload.auditLogs || []);
+      setAuditLogsLoaded(true);
+      setAuditLogPage(1);
+      if (showToast) notify(t("toast.auditLogsRefreshed"), t("toast.loadedCount.auditLogs", { count: payload.auditLogs?.length || 0 }));
+      return payload;
+    })();
+
+    try {
+      return await inflightLoads.current.auditLogs;
+    } catch (error) {
+      setAuditLogsLoaded(true);
+      notify(t("toast.auditLogLoadFailed"), error.message, "error");
+    } finally {
+      delete inflightLoads.current.auditLogs;
+      setLoadingAuditLogs(false);
+    }
+  }
+
   useEffect(() => {
+    async function bootstrapAuth() {
+      if (!localStorage.getItem(authTokenStorageKey)) {
+        setAuthChecked(true);
+        return;
+      }
+      try {
+        const payload = await request("/api/auth/me");
+        setAuthUser(payload.user);
+      } catch {
+        clearSession();
+      } finally {
+        setAuthChecked(true);
+      }
+    }
+
+    bootstrapAuth();
+  }, []);
+
+  useEffect(() => {
+    if (!authUser) return;
     loadConfig().catch((error) => notify(t("toast.configLoadFailed"), error.message, "error"));
     loadServers();
     loadEndpoints();
     loadAPIKeys();
-  }, []);
+  }, [authUser?.email]);
 
   useEffect(() => {
-    if (activeView === "tools" && !toolsLoaded && !loadingTools) {
+    if (authUser && activeView === "tools" && !toolsLoaded && !loadingTools) {
       loadTools(false, false);
     }
-  }, [activeView, toolsLoaded, loadingTools]);
+  }, [authUser, activeView, toolsLoaded, loadingTools]);
+
+  useEffect(() => {
+    if (authUser && activeView === "audit-log" && !auditLogsLoaded && !loadingAuditLogs) {
+      loadAuditLogs(false);
+    }
+  }, [authUser, activeView, auditLogsLoaded, loadingAuditLogs]);
 
   useEffect(() => {
     function syncViewFromHash() {
@@ -753,17 +958,36 @@ function App() {
   }, [preferences]);
 
   useEffect(() => {
-    if (!preferences.refreshInterval) return undefined;
+    if (!authUser || !preferences.refreshInterval) return undefined;
 
     const interval = window.setInterval(() => {
-      loadServers();
-      loadEndpoints();
-      loadAPIKeys();
-      if (toolsLoaded) loadTools(false, false);
+      switch (activeView) {
+        case "servers":
+          loadServers();
+          break;
+        case "endpoints":
+          loadEndpoints();
+          break;
+        case "api-keys":
+          loadAPIKeys();
+          break;
+        case "tools":
+          if (toolsLoaded) loadTools(false, false);
+          break;
+        case "audit-log":
+          if (auditLogsLoaded) loadAuditLogs(false);
+          break;
+        case "overview":
+        default:
+          loadServers();
+          loadEndpoints();
+          loadAPIKeys();
+          break;
+      }
     }, preferences.refreshInterval * 1000);
 
     return () => window.clearInterval(interval);
-  }, [preferences.refreshInterval, toolsLoaded]);
+  }, [authUser, preferences.refreshInterval, toolsLoaded, auditLogsLoaded, activeView]);
 
   const filteredServers = useMemo(() => {
     const query = serverSearch.trim().toLowerCase();
@@ -809,22 +1033,37 @@ function App() {
     return applyTableFilters(items, "tools", tableFilters.tools, { servers });
   }, [tools, toolSearch, tableFilters.tools, servers]);
 
+  const filteredAuditLogs = useMemo(() => {
+    const query = auditLogSearch.trim().toLowerCase();
+    let items = auditLogs;
+    if (query) {
+      items = items.filter((entry) =>
+        [entry.timestamp, entry.transport, entry.endpointId, entry.toolName, entry.status, entry.durationMs, entry.caller, entry.error].join(" ").toLowerCase().includes(query),
+      );
+    }
+    return applyTableFilters(items, "auditLogs", tableFilters.auditLogs);
+  }, [auditLogs, auditLogSearch, tableFilters.auditLogs]);
+
   const sortedServers = useMemo(() => sortByUpdatedAt(filteredServers, preferences.sortByRecent.servers), [filteredServers, preferences.sortByRecent.servers]);
   const sortedEndpoints = useMemo(() => sortByUpdatedAt(filteredEndpoints, preferences.sortByRecent.endpoints), [filteredEndpoints, preferences.sortByRecent.endpoints]);
   const sortedAPIKeys = useMemo(() => sortByUpdatedAt(filteredAPIKeys, preferences.sortByRecent.apiKeys), [filteredAPIKeys, preferences.sortByRecent.apiKeys]);
   const sortedTools = useMemo(() => sortByUpdatedAt(filteredTools, preferences.sortByRecent.tools), [filteredTools, preferences.sortByRecent.tools]);
+  const sortedAuditLogs = useMemo(() => sortByTimestamp(filteredAuditLogs, preferences.sortByRecent.auditLogs), [filteredAuditLogs, preferences.sortByRecent.auditLogs]);
   const serverColumns = visibleColumnIds(preferences, "servers");
   const endpointColumns = visibleColumnIds(preferences, "endpoints");
   const apiKeyColumns = visibleColumnIds(preferences, "apiKeys");
   const toolColumns = visibleColumnIds(preferences, "tools");
+  const auditLogColumns = visibleColumnIds(preferences, "auditLogs");
   const serverPages = pageCount(filteredServers.length, serverPageSize);
   const endpointPages = pageCount(filteredEndpoints.length, endpointPageSize);
   const apiKeyPages = pageCount(filteredAPIKeys.length, apiKeyPageSize);
   const toolPages = pageCount(filteredTools.length, toolPageSize);
+  const auditLogPages = pageCount(filteredAuditLogs.length, auditLogPageSize);
   const visibleServers = sortedServers.slice((clampPage(serverPage, sortedServers.length, serverPageSize) - 1) * serverPageSize, clampPage(serverPage, sortedServers.length, serverPageSize) * serverPageSize);
   const visibleEndpoints = sortedEndpoints.slice((clampPage(endpointPage, sortedEndpoints.length, endpointPageSize) - 1) * endpointPageSize, clampPage(endpointPage, sortedEndpoints.length, endpointPageSize) * endpointPageSize);
   const visibleAPIKeys = sortedAPIKeys.slice((clampPage(apiKeyPage, sortedAPIKeys.length, apiKeyPageSize) - 1) * apiKeyPageSize, clampPage(apiKeyPage, sortedAPIKeys.length, apiKeyPageSize) * apiKeyPageSize);
   const visibleTools = sortedTools.slice((clampPage(toolPage, sortedTools.length, toolPageSize) - 1) * toolPageSize, clampPage(toolPage, sortedTools.length, toolPageSize) * toolPageSize);
+  const visibleAuditLogs = sortedAuditLogs.slice((clampPage(auditLogPage, sortedAuditLogs.length, auditLogPageSize) - 1) * auditLogPageSize, clampPage(auditLogPage, sortedAuditLogs.length, auditLogPageSize) * auditLogPageSize);
 
   function updateForm(name, value) {
     setForm((current) => {
@@ -960,6 +1199,7 @@ function App() {
     if (tableId === "endpoints") setEndpointPage(1);
     if (tableId === "apiKeys") setAPIKeyPage(1);
     if (tableId === "tools") setToolPage(1);
+    if (tableId === "auditLogs") setAuditLogPage(1);
   }
 
   function addTableFilter(tableId, fieldId, context = {}) {
@@ -1240,6 +1480,8 @@ function App() {
   const runningServers = servers.filter((server) => server.status?.running).length;
   const enabledEndpoints = endpoints.filter((endpoint) => endpoint.enabled).length;
   const enabledAPIKeys = apiKeys.filter((key) => key.enabled).length;
+  const failedAuditLogs = auditLogs.filter((entry) => entry.status >= 400).length;
+  const limitedAuditLogs = auditLogs.filter((entry) => entry.status === 429).length;
   const viewTitle =
     activeView === "servers"
       ? t("view.servers.title")
@@ -1249,9 +1491,13 @@ function App() {
           ? t("view.apiKeys.title")
           : activeView === "tools"
             ? t("view.tools.title")
-            : activeView === "settings"
-              ? t("view.settings.title")
-              : t("view.home.title");
+            : activeView === "audit-log"
+              ? t("view.auditLog.title")
+              : activeView === "settings"
+                ? t("view.settings.title")
+                : activeView === "profile"
+                  ? t("view.profile.title")
+                : t("view.home.title");
   const viewDescription =
     activeView === "servers"
       ? t("view.servers.description")
@@ -1261,18 +1507,48 @@ function App() {
           ? t("view.apiKeys.description")
           : activeView === "tools"
             ? t("view.tools.description")
-            : activeView === "settings"
-              ? t("view.settings.description")
-              : t("view.home.description");
+            : activeView === "audit-log"
+              ? t("view.auditLog.description")
+              : activeView === "settings"
+                ? t("view.settings.description")
+                : activeView === "profile"
+                  ? t("view.profile.description")
+                : t("view.home.description");
+
+  if (!authChecked) {
+    return (
+      <>
+        <ApiLoadingBar active />
+        <ToastStack toasts={toasts} />
+      </>
+    );
+  }
+
+  if (!authUser) {
+    return (
+      <>
+        <ApiLoadingBar active={apiLoading} />
+        <ToastStack toasts={toasts} />
+        <LoginPage form={loginForm} loading={loggingIn} onSubmit={login} onUpdate={(name, value) => setLoginForm((current) => ({ ...current, [name]: value }))} />
+      </>
+    );
+  }
 
   return (
     <>
       <ApiLoadingBar active={apiLoading} />
       <ToastStack toasts={toasts} />
       <div class={`app-shell ${preferences.denseTables ? "density-compact" : ""}`}>
-        <Sidebar activeView={activeView} onNavigate={setActiveView} />
+        <Sidebar
+          activeView={activeView}
+          darkMode={darkMode}
+          user={authUser}
+          onLogout={logout}
+          onNavigate={setActiveView}
+          onToggleTheme={() => setTheme(darkMode ? "mcp" : "dark")}
+        />
         <main class="workspace-main">
-          <TopBar title={viewTitle} description={viewDescription} darkMode={darkMode} onToggleTheme={() => setTheme(darkMode ? "mcp" : "dark")}>
+          <TopBar title={viewTitle} description={viewDescription}>
             {activeView === "servers" ? (
               <button class="btn btn-primary btn-sm" onClick={openCreateServer}>{t("action.createServer")}</button>
             ) : activeView === "endpoints" ? (
@@ -1283,9 +1559,11 @@ function App() {
               <LoadingButton className="btn btn-primary btn-sm" loading={loadingTools} onClick={() => loadTools(true)}>
                 {t("action.refreshTools")}
               </LoadingButton>
+            ) : activeView === "audit-log" ? (
+              <button class="btn btn-outline btn-sm" onClick={() => loadAuditLogs(true)} disabled={loadingAuditLogs}>{loadingAuditLogs ? t("common.refreshing") : t("common.refresh")}</button>
             ) : activeView === "settings" ? (
               <button class="btn btn-outline btn-sm" onClick={resetPreferences}>{t("action.resetPreferences")}</button>
-            ) : (
+            ) : activeView === "profile" ? null : (
               <button class="btn btn-outline btn-sm" onClick={() => { loadServers(true); loadEndpoints(true); loadAPIKeys(true); }} disabled={loadingServers || loadingEndpoints || loadingAPIKeys}>{loadingServers || loadingEndpoints || loadingAPIKeys ? t("common.refreshing") : t("common.refresh")}</button>
             )}
           </TopBar>
@@ -1591,6 +1869,61 @@ function App() {
             </div>
           ) : null}
 
+          {activeView === "audit-log" ? (
+            <div class="workspace-stack">
+              <section class="metric-grid">
+                <Stat title={t("metric.auditEvents")} value={auditLogs.length} tone="text-primary" />
+                <Stat title={t("metric.failedEvents")} value={failedAuditLogs} tone={failedAuditLogs ? "text-error" : "text-success"} />
+                <Stat title={t("metric.limitedCalls")} value={limitedAuditLogs} tone="text-secondary" />
+                <Stat title={t("metric.mcpEvents")} value={auditLogs.filter((entry) => entry.transport === "mcp").length} />
+              </section>
+              <ListPanel
+                title={t("list.auditLogsTitle")}
+                subtitle={t("list.auditLogsSubtitle", { shown: filteredAuditLogs.length, total: auditLogs.length })}
+                action={<button class="btn btn-outline btn-sm" onClick={() => loadAuditLogs(true)} disabled={loadingAuditLogs}>{loadingAuditLogs ? t("common.refreshing") : t("common.refresh")}</button>}
+                searchValue={auditLogSearch}
+                onSearch={(value) => {
+                  setAuditLogSearch(value);
+                  setAuditLogPage(1);
+                }}
+                pageSize={auditLogPageSize}
+                onPageSize={(value) => {
+                  setAuditLogPageSize(Number(value));
+                  setAuditLogPage(1);
+                }}
+                showAdvancedControls={preferences.showAdvancedControls}
+                pageSizes={[10, 25, 50]}
+                page={clampPage(auditLogPage, filteredAuditLogs.length, auditLogPageSize)}
+                pages={auditLogPages}
+                prev={() => setAuditLogPage((page) => clampPage(page - 1, filteredAuditLogs.length, auditLogPageSize))}
+                next={() => setAuditLogPage((page) => clampPage(page + 1, filteredAuditLogs.length, auditLogPageSize))}
+                tableId="auditLogs"
+                visibleColumns={auditLogColumns}
+                sortActive={Boolean(preferences.sortByRecent.auditLogs)}
+                onToggleSort={() => toggleRecentSort("auditLogs")}
+                onToggleColumn={(columnId) => toggleTableColumn("auditLogs", columnId)}
+                filters={tableFilters.auditLogs}
+                onAddFilter={(fieldId) => addTableFilter("auditLogs", fieldId)}
+                onUpdateFilter={(filterId, value) => updateTableFilter("auditLogs", filterId, value)}
+                onRemoveFilter={(filterId) => removeTableFilter("auditLogs", filterId)}
+                onClearFilters={() => clearTableFilters("auditLogs")}
+              >
+                <div class="data-table audit-log-table">
+                  <div class="data-row data-head" style={{ gridTemplateColumns: tableGridTemplate("auditLogs", auditLogColumns) }}>
+                    <TableHeader tableId="auditLogs" visibleColumns={auditLogColumns} />
+                  </div>
+                  {loadingAuditLogs ? (
+                    <SkeletonList />
+                  ) : visibleAuditLogs.length ? (
+                    visibleAuditLogs.map((entry) => <AuditLogCard key={entry.id} entry={entry} visibleColumns={auditLogColumns} />)
+                  ) : (
+                    <EmptyState message={t("empty.noAuditLogs")} />
+                  )}
+                </div>
+              </ListPanel>
+            </div>
+          ) : null}
+
           {activeView === "settings" ? (
             <div class="workspace-stack">
               <section class="metric-grid">
@@ -1660,6 +1993,16 @@ function App() {
                 </div>
               </section>
             </div>
+          ) : null}
+
+          {activeView === "profile" ? (
+            <ProfileView
+              form={passwordForm}
+              saving={savingPassword}
+              user={authUser}
+              onSubmit={changePassword}
+              onUpdate={(name, value) => setPasswordForm((current) => ({ ...current, [name]: value }))}
+            />
           ) : null}
       </main>
       </div>
@@ -1732,9 +2075,9 @@ function App() {
   );
 }
 
-function LoadingButton({ className, loading, onClick, children }) {
+function LoadingButton({ className, loading, onClick, type = "button", children }) {
   return (
-    <button class={className} onClick={onClick} disabled={loading}>
+    <button class={className} type={type} onClick={onClick} disabled={loading}>
       {loading ? <span class="loading loading-spinner loading-sm"></span> : null}
       {loading ? t("common.loading") : children}
     </button>
@@ -1754,13 +2097,79 @@ function ApiLoadingBar({ active }) {
   );
 }
 
-function Sidebar({ activeView, onNavigate }) {
+function LoginPage({ form, loading, onSubmit, onUpdate }) {
+  return (
+    <main class="login-shell">
+      <section class="login-card">
+        <div class="brand-row">
+          <div class="brand-mark">M</div>
+          <div>
+            <div class="text-sm font-bold text-slate-900">{t("brand.name")}</div>
+            <div class="text-xs text-slate-500">{t("auth.platformLogin")}</div>
+          </div>
+        </div>
+        <div>
+          <h1 class="mt-6 text-3xl font-black text-slate-950">{t("auth.signInTitle")}</h1>
+          <p class="mt-2 text-sm text-slate-500">{t("auth.signInDescription")}</p>
+        </div>
+        <form class="mt-6 grid gap-4" onSubmit={onSubmit}>
+          <Field label={t("auth.email")}>
+            <input class="input input-bordered w-full" type="email" autocomplete="username" value={form.email} onInput={(event) => onUpdate("email", event.currentTarget.value)} required />
+          </Field>
+          <Field label={t("auth.password")}>
+            <input class="input input-bordered w-full" type="password" autocomplete="current-password" value={form.password} onInput={(event) => onUpdate("password", event.currentTarget.value)} required />
+          </Field>
+          <LoadingButton className="btn btn-primary w-full" type="submit" loading={loading}>
+            {t("auth.signIn")}
+          </LoadingButton>
+        </form>
+        <p class="mt-4 rounded-xl bg-slate-50 p-3 text-xs text-slate-500">{t("auth.defaultCredentialHint")}</p>
+      </section>
+    </main>
+  );
+}
+
+function ProfileView({ form, saving, user, onSubmit, onUpdate }) {
+  return (
+    <div class="workspace-stack">
+      <section class="workspace-panel">
+        <div class="flex flex-col gap-1">
+          <h2 class="text-lg font-bold text-slate-950">{t("profile.account")}</h2>
+          <p class="text-sm text-slate-500">{user?.email}</p>
+        </div>
+      </section>
+      <section class="workspace-panel max-w-2xl">
+        <div class="flex flex-col gap-1">
+          <h2 class="text-lg font-bold text-slate-950">{t("profile.changePassword")}</h2>
+          <p class="text-sm text-slate-500">{t("profile.changePasswordDescription")}</p>
+        </div>
+        <form class="mt-5 grid gap-4" onSubmit={onSubmit}>
+          <Field label={t("profile.currentPassword")}>
+            <input class="input input-bordered w-full" type="password" autocomplete="current-password" value={form.currentPassword} onInput={(event) => onUpdate("currentPassword", event.currentTarget.value)} required />
+          </Field>
+          <Field label={t("profile.newPassword")}>
+            <input class="input input-bordered w-full" type="password" autocomplete="new-password" value={form.newPassword} onInput={(event) => onUpdate("newPassword", event.currentTarget.value)} required />
+          </Field>
+          <Field label={t("profile.confirmPassword")}>
+            <input class="input input-bordered w-full" type="password" autocomplete="new-password" value={form.confirmPassword} onInput={(event) => onUpdate("confirmPassword", event.currentTarget.value)} required />
+          </Field>
+          <LoadingButton className="btn btn-primary justify-self-start" type="submit" loading={saving}>
+            {t("profile.savePassword")}
+          </LoadingButton>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function Sidebar({ activeView, darkMode, user, onLogout, onNavigate, onToggleTheme }) {
   const links = [
     { id: "overview", label: t("nav.overview") },
     { id: "servers", label: t("nav.mcpServers") },
     { id: "endpoints", label: t("nav.endpoints") },
     { id: "api-keys", label: t("nav.apiKeys") },
     { id: "tools", label: t("nav.tools") },
+    { id: "audit-log", label: t("nav.auditLog") },
     { id: "settings", label: t("nav.settings") },
   ];
 
@@ -1786,12 +2195,30 @@ function Sidebar({ activeView, onNavigate }) {
             </button>
           ))}
         </nav>
+        <div class="sidebar-user-menu">
+          <button class="sidebar-avatar-button" type="button">
+            <span class="sidebar-avatar">{initialsForEmail(user?.email)}</span>
+            <span class="min-w-0">
+              <span class="block truncate text-sm font-bold text-slate-900">{user?.email}</span>
+              <span class="block text-xs text-slate-500">{t("auth.signedIn")}</span>
+            </span>
+          </button>
+          <div class="sidebar-avatar-menu">
+            <button type="button" onClick={() => onNavigate("profile")}>{t("auth.profile")}</button>
+            <button type="button" onClick={onToggleTheme}>{darkMode ? t("auth.lightMode") : t("auth.darkMode")}</button>
+            <button type="button" onClick={onLogout}>{t("auth.logout")}</button>
+          </div>
+        </div>
       </aside>
     </>
   );
 }
 
-function TopBar({ title, description, darkMode, onToggleTheme, children }) {
+function initialsForEmail(email = "") {
+  return email.trim().slice(0, 1).toUpperCase() || "A";
+}
+
+function TopBar({ title, description, children }) {
   return (
     <header class="topbar">
       <div>
@@ -1799,7 +2226,6 @@ function TopBar({ title, description, darkMode, onToggleTheme, children }) {
         <p class="text-sm text-slate-500">{description}</p>
       </div>
       <div class="flex items-center gap-2">
-        <ThemeToggle darkMode={darkMode} onToggle={onToggleTheme} />
         {children}
       </div>
     </header>
@@ -2390,7 +2816,7 @@ function ListPanel({
             </button>
           </div>
         ) : null}
-        <div class="min-h-80 overflow-hidden rounded-xl border border-slate-200">{children}</div>
+        <div class="min-h-80 overflow-x-auto rounded-xl border border-slate-200">{children}</div>
         <div class="pagination-bar">
           <div class="pagination-size">
             <select value={pageSize} onChange={(event) => onPageSize(event.currentTarget.value)}>
@@ -2579,14 +3005,44 @@ function APIKeyCard({ apiKey, endpoints, onEdit, onDelete, visibleColumns }) {
 }
 
 function ToolCard({ tool, visibleColumns }) {
+  const description = tool.description || t("card.noDescription");
   return (
     <div class="data-row" style={{ gridTemplateColumns: tableGridTemplate("tools", visibleColumns) }}>
-      {columnVisible(visibleColumns, "name") ? <div class="break-all font-mono text-sm font-semibold text-primary">{tool.name}</div> : null}
-      {columnVisible(visibleColumns, "server") ? <div class="text-sm text-slate-600">{tool.serverName}</div> : null}
-      {columnVisible(visibleColumns, "nativeName") ? <div class="font-mono text-xs text-slate-500">{tool.nativeName}</div> : null}
-      {columnVisible(visibleColumns, "description") ? <div class="line-clamp-2 text-sm text-slate-500">{tool.description || t("card.noDescription")}</div> : null}
+      {columnVisible(visibleColumns, "name") ? (
+        <div title={tool.name}>
+          <div class="truncate font-mono text-sm font-semibold text-primary">{tool.name}</div>
+        </div>
+      ) : null}
+      {columnVisible(visibleColumns, "server") ? <div class="truncate text-sm text-slate-600">{tool.serverName}</div> : null}
+      {columnVisible(visibleColumns, "nativeName") ? (
+        <div title={tool.nativeName}>
+          <div class="truncate font-mono text-xs text-slate-500">{tool.nativeName}</div>
+        </div>
+      ) : null}
+      {columnVisible(visibleColumns, "description") ? (
+        <div class="line-clamp-2 text-sm text-slate-500" title={description}>{description}</div>
+      ) : null}
       {columnVisible(visibleColumns, "createdAt") ? <TimestampCell value={tool.createdAt} /> : null}
       {columnVisible(visibleColumns, "updatedAt") ? <TimestampCell value={tool.updatedAt} /> : null}
+    </div>
+  );
+}
+
+function AuditLogCard({ entry, visibleColumns }) {
+  const statusClass = entry.status === 429 ? "status-warning" : entry.status >= 400 ? "status-error" : "status-success";
+  const error = entry.error || t("common.ok");
+  return (
+    <div class="data-row" style={{ gridTemplateColumns: tableGridTemplate("auditLogs", visibleColumns) }}>
+      {columnVisible(visibleColumns, "timestamp") ? <TimestampCell value={entry.timestamp} /> : null}
+      {columnVisible(visibleColumns, "transport") ? <span class="font-mono text-xs uppercase text-slate-600">{entry.transport || t("common.notSet")}</span> : null}
+      {columnVisible(visibleColumns, "endpoint") ? <div class="truncate font-mono text-xs text-slate-600">{entry.endpointId || t("common.notSet")}</div> : null}
+      {columnVisible(visibleColumns, "tool") ? <div class="truncate font-mono text-xs text-primary" title={entry.toolName}>{entry.toolName || t("common.notSet")}</div> : null}
+      {columnVisible(visibleColumns, "status") ? <span class={`status-pill ${statusClass}`}>{entry.status}</span> : null}
+      {columnVisible(visibleColumns, "duration") ? <span class="text-sm text-slate-500">{formatDuration(entry.durationMs)}</span> : null}
+      {columnVisible(visibleColumns, "caller") ? <div class="truncate text-sm text-slate-600" title={entry.caller}>{entry.caller || t("common.notSet")}</div> : null}
+      {columnVisible(visibleColumns, "error") ? (
+        <div class={`line-clamp-2 text-sm ${entry.error ? "text-error" : "text-slate-500"}`} title={error}>{error}</div>
+      ) : null}
     </div>
   );
 }

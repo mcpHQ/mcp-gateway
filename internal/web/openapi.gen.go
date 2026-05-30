@@ -206,15 +206,18 @@ type APIKeysResponse struct {
 
 // AuditLog defines model for AuditLog.
 type AuditLog struct {
-	Caller     *string           `json:"caller,omitempty"`
-	DurationMs int64             `json:"durationMs"`
-	EndpointId *string           `json:"endpointId,omitempty"`
-	Error      *string           `json:"error,omitempty"`
-	Id         string            `json:"id"`
-	Status     int               `json:"status"`
-	Timestamp  time.Time         `json:"timestamp"`
-	ToolName   *string           `json:"toolName,omitempty"`
-	Transport  AuditLogTransport `json:"transport"`
+	Caller     *string `json:"caller,omitempty"`
+	DurationMs int64   `json:"durationMs"`
+	EndpointId *string `json:"endpointId,omitempty"`
+	Error      *string `json:"error,omitempty"`
+	Id         string  `json:"id"`
+
+	// RawCall Raw JSON-RPC tools/call payload sent to the upstream MCP server.
+	RawCall   *string           `json:"rawCall,omitempty"`
+	Status    int               `json:"status"`
+	Timestamp time.Time         `json:"timestamp"`
+	ToolName  *string           `json:"toolName,omitempty"`
+	Transport AuditLogTransport `json:"transport"`
 }
 
 // AuditLogTransport defines model for AuditLog.Transport.

@@ -460,7 +460,7 @@ func (h *handler) callEndpointTool(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		duration := time.Since(start)
 		annotateToolCallAccessLog(r, "rest", endpointID, toolName, err)
-		h.recordAuditLog(r, "rest", endpointID, toolName, http.StatusBadRequest, duration, err)
+		h.recordAuditLog(r, "rest", endpointID, toolName, http.StatusBadRequest, duration, err, "")
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -474,13 +474,13 @@ func (h *handler) callEndpointTool(w http.ResponseWriter, r *http.Request) {
 		status := statusForToolCallError(err)
 		duration := time.Since(start)
 		annotateToolCallAccessLog(r, "rest", endpointID, toolName, err)
-		h.recordAuditLog(r, "rest", endpointID, toolName, status, duration, err)
+		h.recordAuditLog(r, "rest", endpointID, toolName, status, duration, err, rawMCPToolCallJSON(toolName, arguments))
 		writeError(w, status, err)
 		return
 	}
 	duration := time.Since(start)
 	annotateToolCallAccessLog(r, "rest", endpointID, toolName, nil)
-	h.recordAuditLog(r, "rest", endpointID, toolName, http.StatusOK, duration, nil)
+	h.recordAuditLog(r, "rest", endpointID, toolName, http.StatusOK, duration, nil, rawMCPToolCallJSON(toolName, arguments))
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -529,7 +529,7 @@ func (h *handler) mcpRPC(w http.ResponseWriter, r *http.Request, endpointID stri
 	case "tools/call":
 		start := time.Now()
 		if endpointID == "" {
-			h.recordAuditLog(r, "mcp", endpointID, "", http.StatusBadRequest, time.Since(start), errors.New("tool calls must use an endpoint route: /mcp/{endpointId}"))
+			h.recordAuditLog(r, "mcp", endpointID, "", http.StatusBadRequest, time.Since(start), errors.New("tool calls must use an endpoint route: /mcp/{endpointId}"), "")
 			writeJSON(w, http.StatusOK, rpcError(req.ID, -32000, "tool calls must use an endpoint route: /mcp/{endpointId}"))
 			return
 		}
@@ -545,20 +545,20 @@ func (h *handler) mcpRPC(w http.ResponseWriter, r *http.Request, endpointID stri
 			duration := time.Since(start)
 			status := statusForToolCallError(err)
 			annotateToolCallAccessLog(r, "mcp", endpointID, params.Name, err)
-			h.recordAuditLog(r, "mcp", endpointID, params.Name, status, duration, err)
+			h.recordAuditLog(r, "mcp", endpointID, params.Name, status, duration, err, rawMCPToolCallJSON(params.Name, params.Arguments))
 			writeJSON(w, http.StatusOK, rpcError(req.ID, -32000, err.Error()))
 			return
 		}
 		duration := time.Since(start)
 		annotateToolCallAccessLog(r, "mcp", endpointID, params.Name, nil)
-		h.recordAuditLog(r, "mcp", endpointID, params.Name, http.StatusOK, duration, nil)
+		h.recordAuditLog(r, "mcp", endpointID, params.Name, http.StatusOK, duration, nil, rawMCPToolCallJSON(params.Name, params.Arguments))
 		writeJSON(w, http.StatusOK, rpcResult(req.ID, result))
 	default:
 		writeJSON(w, http.StatusOK, rpcError(req.ID, -32601, "method not found"))
 	}
 }
 
-func (h *handler) recordAuditLog(r *http.Request, transport, endpointID, toolName string, status int, duration time.Duration, err error) {
+func (h *handler) recordAuditLog(r *http.Request, transport, endpointID, toolName string, status int, duration time.Duration, err error, rawCall string) {
 	if h.gw == nil {
 		return
 	}
@@ -576,10 +576,34 @@ func (h *handler) recordAuditLog(r *http.Request, transport, endpointID, toolNam
 		DurationMS: duration.Milliseconds(),
 		Caller:     callerForRequest(r),
 		Error:      message,
+		RawCall:    rawCall,
 	}
 	if auditErr := h.gw.RecordAuditLog(record); auditErr != nil {
 		log.Printf("audit_log_enqueue_failed transport=%s endpoint=%s tool=%s error=%q", transport, endpointID, toolName, auditErr.Error())
 	}
+}
+
+func rawMCPToolCallJSON(gatewayName string, arguments map[string]any) string {
+	_, nativeName, ok := strings.Cut(gatewayName, "__")
+	if !ok || nativeName == "" {
+		return ""
+	}
+	if arguments == nil {
+		arguments = map[string]any{}
+	}
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      nativeName,
+			"arguments": arguments,
+		},
+	}
+	bytes, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return ""
+	}
+	return string(bytes)
 }
 
 func newAuditLogID() string {

@@ -64,6 +64,7 @@ func TestAuditLogsInsertAndListRecentFirst(t *testing.T) {
 		DurationMS: 34,
 		Caller:     "127.0.0.1",
 		Error:      "upstream failed",
+		RawCall:    `{"method":"tools/call"}`,
 	}
 	if err := store.InsertAuditLog(older); err != nil {
 		t.Fatalf("insert older audit log: %v", err)
@@ -82,7 +83,7 @@ func TestAuditLogsInsertAndListRecentFirst(t *testing.T) {
 	if logs[0].ID != newer.ID || logs[1].ID != older.ID {
 		t.Fatalf("expected newest first, got %#v", logs)
 	}
-	if logs[0].Error != newer.Error || logs[0].DurationMS != newer.DurationMS {
+	if logs[0].Error != newer.Error || logs[0].DurationMS != newer.DurationMS || logs[0].RawCall != newer.RawCall {
 		t.Fatalf("newer audit log fields were not preserved: %#v", logs[0])
 	}
 }

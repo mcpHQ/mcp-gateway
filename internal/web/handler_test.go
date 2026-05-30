@@ -301,6 +301,9 @@ func TestEndpointToolCallsCreateAuditLogs(t *testing.T) {
 	if log.Caller != "apikey:Audit Client" {
 		t.Fatalf("expected api key caller, got %q", log.Caller)
 	}
+	if !strings.Contains(log.RawCall, `"name": "alpha"`) {
+		t.Fatalf("expected raw upstream MCP call in audit log, got %q", log.RawCall)
+	}
 }
 
 func TestMCPToolCallFailureCreatesAuditLog(t *testing.T) {
@@ -359,6 +362,9 @@ func TestMCPToolCallFailureCreatesAuditLog(t *testing.T) {
 	}
 	if !strings.Contains(log.Error, "upstream exploded") {
 		t.Fatalf("expected upstream error in audit log, got %#v", log)
+	}
+	if !strings.Contains(log.RawCall, `"name": "alpha"`) {
+		t.Fatalf("expected raw upstream MCP call in audit log, got %q", log.RawCall)
 	}
 }
 

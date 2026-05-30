@@ -673,6 +673,9 @@ components:
           type: string
         error:
           type: string
+        rawCall:
+          type: string
+          description: Raw JSON-RPC tools/call payload sent to the upstream MCP server.
     AuditLogsResponse:
       type: object
       required:

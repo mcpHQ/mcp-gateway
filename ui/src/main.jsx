@@ -113,6 +113,7 @@ const tableColumns = {
     { id: "duration", labelKey: "table.duration", width: "minmax(7rem, 0.55fr)" },
     { id: "caller", labelKey: "table.caller", width: "minmax(12rem, 0.9fr)" },
     { id: "error", labelKey: "table.error", width: "minmax(16rem, 1.3fr)" },
+    { id: "rawCall", labelKey: "audit.rawCall", width: "minmax(18rem, 1.4fr)" },
   ],
 };
 
@@ -1093,7 +1094,7 @@ function App() {
     let items = auditLogs;
     if (query) {
       items = items.filter((entry) =>
-        [entry.timestamp, entry.transport, entry.endpointId, entry.toolName, entry.status, entry.durationMs, entry.caller, entry.error].join(" ").toLowerCase().includes(query),
+        [entry.timestamp, entry.transport, entry.endpointId, entry.toolName, entry.status, entry.durationMs, entry.caller, entry.error, entry.rawCall].join(" ").toLowerCase().includes(query),
       );
     }
     return applyTableFilters(items, "auditLogs", tableFilters.auditLogs);
@@ -1666,6 +1667,16 @@ function App() {
                   </div>
                 </div>
               </section>
+
+              <GettingStartedFlow
+                endpointPattern={endpointPattern}
+                hasServers={servers.length > 0}
+                hasEndpoints={endpoints.length > 0}
+                onCreateServer={openCreateServer}
+                onCreateEndpoint={openCreateEndpoint}
+                onCreateAPIKey={openCreateAPIKey}
+                onViewTools={() => setActiveView("tools")}
+              />
 
               <section class="metric-grid">
                 <Stat title={t("overview.totalServers")} value={servers.length} />
@@ -2699,6 +2710,68 @@ function OverviewCard({ label, value, detail }) {
   );
 }
 
+function GettingStartedFlow({ endpointPattern, hasServers, hasEndpoints, onCreateServer, onCreateEndpoint, onCreateAPIKey, onViewTools }) {
+  const steps = [
+    {
+      number: "01",
+      title: t("overview.flowConnectTitle"),
+      description: t("overview.flowConnectDescription"),
+      action: t("action.createServer"),
+      onClick: onCreateServer,
+    },
+    {
+      number: "02",
+      title: t("overview.flowEndpointTitle"),
+      description: t("overview.flowEndpointDescription"),
+      action: t("action.createEndpoint"),
+      onClick: onCreateEndpoint,
+      disabled: !hasServers,
+    },
+    {
+      number: "03",
+      title: t("overview.flowKeyTitle"),
+      description: t("overview.flowKeyDescription"),
+      action: t("action.createAPIKey"),
+      onClick: onCreateAPIKey,
+      disabled: !hasEndpoints,
+    },
+    {
+      number: "04",
+      title: t("overview.flowUseTitle"),
+      description: t("overview.flowUseDescription"),
+      action: t("overview.flowUseAction"),
+      onClick: onViewTools,
+      code: endpointPattern,
+    },
+  ];
+
+  return (
+    <section class="workspace-panel">
+      <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div class="section-title">{t("overview.gettingStarted")}</div>
+          <p class="mt-2 max-w-3xl text-sm text-slate-500">{t("overview.gettingStartedDescription")}</p>
+        </div>
+        <span class="w-fit rounded-full bg-primary/10 px-3 py-1 text-xs font-black uppercase tracking-wide text-primary">{t("overview.flowsLabel")}</span>
+      </div>
+      <div class="mt-5 grid gap-4 lg:grid-cols-4">
+        {steps.map((step) => (
+          <div class="flex h-full flex-col rounded-2xl border border-slate-200 bg-slate-50 p-4" key={step.number}>
+            <div class="flex items-center justify-between gap-3">
+              <span class="rounded-full bg-white px-2.5 py-1 text-xs font-black text-primary shadow-sm">{step.number}</span>
+              {step.disabled ? <span class="text-xs font-bold text-slate-400">{t("common.notConfigured")}</span> : null}
+            </div>
+            <h3 class="mt-4 text-base font-black text-slate-950">{step.title}</h3>
+            <p class="mt-2 flex-1 text-sm leading-6 text-slate-500">{step.description}</p>
+            {step.code ? <code class="mt-4 block overflow-hidden text-ellipsis whitespace-nowrap rounded-xl bg-white px-3 py-2 text-xs font-bold text-primary">{step.code}</code> : null}
+            <button class="btn btn-outline btn-sm mt-4" onClick={step.onClick} disabled={step.disabled}>{step.action}</button>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function Field({ label, children, wide = false }) {
   return (
     <label class={wide ? "form-control xl:col-span-2" : "form-control"}>
@@ -3159,6 +3232,7 @@ function ToolCard({ tool, visibleColumns }) {
 function AuditLogCard({ entry, visibleColumns }) {
   const statusClass = entry.status === 429 ? "status-warning" : entry.status >= 400 ? "status-error" : "status-success";
   const error = entry.error || t("common.ok");
+  const rawCall = entry.rawCall || "";
   return (
     <div class="data-row" style={{ gridTemplateColumns: tableGridTemplate("auditLogs", visibleColumns) }}>
       {columnVisible(visibleColumns, "timestamp") ? <TimestampCell value={entry.timestamp} /> : null}
@@ -3170,6 +3244,16 @@ function AuditLogCard({ entry, visibleColumns }) {
       {columnVisible(visibleColumns, "caller") ? <div class="truncate text-sm text-slate-600" title={entry.caller}>{entry.caller || t("common.notSet")}</div> : null}
       {columnVisible(visibleColumns, "error") ? (
         <div class={`line-clamp-2 text-sm ${entry.error ? "text-error" : "text-slate-500"}`} title={error}>{error}</div>
+      ) : null}
+      {columnVisible(visibleColumns, "rawCall") ? (
+        rawCall ? (
+          <details class="group text-xs text-slate-600">
+            <summary class="cursor-pointer font-semibold text-primary">{t("audit.showRawCall")}</summary>
+            <pre class="mt-2 max-h-48 overflow-auto rounded-lg bg-slate-950 p-3 text-[0.7rem] leading-relaxed text-slate-100">{rawCall}</pre>
+          </details>
+        ) : (
+          <span class="text-sm text-slate-400">{t("common.notSet")}</span>
+        )
       ) : null}
     </div>
   );

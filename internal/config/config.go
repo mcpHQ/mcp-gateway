@@ -117,6 +117,7 @@ type AuditLogRecord struct {
 	DurationMS int64
 	Caller     string
 	Error      string
+	RawCall    string
 }
 
 type RateLimitBucketResult struct {
@@ -668,13 +669,14 @@ func (s *Store) InsertAuditLog(record AuditLogRecord) error {
 	record.ToolName = strings.TrimSpace(record.ToolName)
 	record.Caller = strings.TrimSpace(record.Caller)
 	record.Error = strings.TrimSpace(record.Error)
+	record.RawCall = strings.TrimSpace(record.RawCall)
 
 	_, err := s.db.Exec(`
 		INSERT INTO audit_logs (
-			id, timestamp, transport, endpoint_id, tool_name, status, duration_ms, caller, error
+			id, timestamp, transport, endpoint_id, tool_name, status, duration_ms, caller, error, raw_call
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, record.ID, formatDBTime(record.Timestamp), record.Transport, record.EndpointID, record.ToolName, record.Status, record.DurationMS, record.Caller, record.Error)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, record.ID, formatDBTime(record.Timestamp), record.Transport, record.EndpointID, record.ToolName, record.Status, record.DurationMS, record.Caller, record.Error, record.RawCall)
 	return err
 }
 
@@ -687,7 +689,7 @@ func (s *Store) ListAuditLogs(limit int) ([]AuditLogRecord, error) {
 	}
 
 	rows, err := s.db.Query(`
-		SELECT id, timestamp, transport, endpoint_id, tool_name, status, duration_ms, caller, error
+		SELECT id, timestamp, transport, endpoint_id, tool_name, status, duration_ms, caller, error, raw_call
 		FROM audit_logs
 		ORDER BY timestamp DESC, id DESC
 		LIMIT ?
@@ -711,6 +713,7 @@ func (s *Store) ListAuditLogs(limit int) ([]AuditLogRecord, error) {
 			&record.DurationMS,
 			&record.Caller,
 			&record.Error,
+			&record.RawCall,
 		); err != nil {
 			return nil, err
 		}

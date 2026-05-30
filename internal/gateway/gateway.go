@@ -72,6 +72,7 @@ type AuditLog struct {
 	DurationMS int64  `json:"durationMs"`
 	Caller     string `json:"caller,omitempty"`
 	Error      string `json:"error,omitempty"`
+	RawCall    string `json:"rawCall,omitempty"`
 }
 
 type Tool struct {
@@ -1393,6 +1394,7 @@ func auditLogFromRecord(record config.AuditLogRecord) AuditLog {
 		DurationMS: record.DurationMS,
 		Caller:     record.Caller,
 		Error:      record.Error,
+		RawCall:    record.RawCall,
 	}
 }
 

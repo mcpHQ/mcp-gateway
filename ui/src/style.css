@@ -114,15 +114,13 @@ body {
   gap: 0.65rem;
 }
 
-.brand-mark {
-  display: grid;
+.brand-logo {
+  display: block;
   height: 1.75rem;
   width: 1.75rem;
-  place-items: center;
   border-radius: 0.55rem;
-  background: #1592e6;
-  color: white;
-  font-weight: 900;
+  object-fit: cover;
+  box-shadow: 0 6px 14px rgb(15 23 42 / 0.18);
 }
 
 .module-group {
@@ -194,6 +192,25 @@ body {
   color: #ffffff;
   font-size: 0.8rem;
   font-weight: 900;
+}
+
+.sidebar-resource-links {
+  display: grid;
+  gap: 0.25rem;
+  margin-bottom: 0.65rem;
+}
+
+.sidebar-resource-links a {
+  border-radius: 0.55rem;
+  padding: 0.45rem 0.65rem;
+  color: #2563eb;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.sidebar-resource-links a:hover {
+  background: #eef6ff;
+  color: #0f4f99;
 }
 
 .sidebar-avatar-menu {
@@ -726,6 +743,15 @@ html[data-theme="dark"] .sidebar-avatar-button,
 html[data-theme="dark"] .sidebar-avatar-menu {
   border-color: #243244;
   background: #111c2e;
+}
+
+html[data-theme="dark"] .sidebar-resource-links a {
+  color: #93c5fd;
+}
+
+html[data-theme="dark"] .sidebar-resource-links a:hover {
+  background: #172554;
+  color: #bfdbfe;
 }
 
 html[data-theme="dark"] .sidebar-avatar-menu button {

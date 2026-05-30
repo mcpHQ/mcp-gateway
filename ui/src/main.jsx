@@ -1,5 +1,6 @@
 import { render } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import logoUrl from "./assets/logo.png";
 import presets from "./mcp-presets.json";
 import stringsYaml from "./strings.en.yaml?raw";
 import "./style.css";
@@ -35,7 +36,7 @@ const initialForm = {
   password: "",
   headers: [{ key: "", value: "", enabled: true }],
   command: "",
-  args: "",
+  args: [],
   weight: 1,
   enabled: true,
 };
@@ -66,6 +67,9 @@ const defaultPreferences = {
   sortByRecent: {},
   tableColumns: {},
 };
+
+const existingConfigPresetId = "existing-config";
+const customStdioPresetId = "custom-stdio";
 
 const tableColumns = {
   servers: [
@@ -283,10 +287,6 @@ async function api(path, options = {}) {
   return payload;
 }
 
-function splitArgs(value) {
-  return value.match(/(?:[^\s"]+|"[^"]*")+/g)?.map((part) => part.replace(/^"|"$/g, "")) || [];
-}
-
 function slugFromName(value) {
   const slug = value
     .trim()
@@ -307,6 +307,35 @@ function headerRowsFromHeaders(headers = {}) {
     .filter(([key]) => key.toLowerCase() !== "authorization")
     .map(([key, value]) => ({ key, value: String(value), enabled: true }));
   return rows.length ? rows : [{ key: "", value: "", enabled: true }];
+}
+
+function argsFromServer(server = {}) {
+  return Array.isArray(server.args) ? server.args.map((arg) => String(arg)) : [];
+}
+
+function cleanArgs(args = []) {
+  return args.map((arg) => String(arg).trim()).filter(Boolean);
+}
+
+function argsEqual(left = [], right = []) {
+  const leftArgs = cleanArgs(left);
+  const rightArgs = cleanArgs(right);
+  return leftArgs.length === rightArgs.length && leftArgs.every((arg, index) => arg === rightArgs[index]);
+}
+
+function presetIdForServer(server = {}) {
+  const transport = server.transport || (server.url ? "http" : "stdio");
+  const match = presets.find((preset) => {
+    const presetServer = preset.server || {};
+    const presetTransport = presetServer.transport || (presetServer.url ? "http" : "stdio");
+    if (presetTransport !== transport) return false;
+    if (transport === "http") {
+      return Boolean(presetServer.url) && presetServer.url === server.url;
+    }
+    return presetServer.command === server.command && argsEqual(presetServer.args, server.args);
+  });
+  if (match) return match.id;
+  return transport === "stdio" ? existingConfigPresetId : "custom-http";
 }
 
 function authFromServer(server = {}) {
@@ -396,15 +425,16 @@ function buildAuth(form) {
 }
 
 function serverPayloadFromForm(form) {
+  const isHTTP = form.transport === "http";
   return {
     id: form.id.trim() || slugFromName(form.name),
     name: form.name.trim(),
     transport: form.transport,
-    url: form.url.trim(),
-    auth: buildAuth(form),
-    headers: buildHeaders(form),
-    command: form.command.trim(),
-    args: splitArgs(form.args.trim()),
+    url: isHTTP ? form.url.trim() : "",
+    auth: isHTTP ? buildAuth(form) : { type: "none" },
+    headers: isHTTP ? buildHeaders(form) : {},
+    command: isHTTP ? "" : form.command.trim(),
+    args: isHTTP ? [] : cleanArgs(form.args),
     enabled: form.enabled,
     weight: Number(form.weight || 1),
   };
@@ -614,7 +644,7 @@ function formFromPreset(preset) {
     password: auth.password,
     headers: headerRowsFromHeaders(server.headers),
     command: server.command || "",
-    args: (server.args || []).join(" "),
+    args: argsFromServer(server),
     weight: server.weight || 1,
     enabled: Boolean(server.enabled),
   };
@@ -626,6 +656,27 @@ function presetLabel(preset) {
 
 function presetDescription(preset) {
   return stringValue(preset.descriptionKey, preset.description || "");
+}
+
+function presetDescriptionForForm(form) {
+  if (form.presetId === existingConfigPresetId) {
+    return t("server.existingConfigPresetHelp");
+  }
+  if (form.presetId === customStdioPresetId) {
+    return t("server.customStdioPresetHelp");
+  }
+  const preset = presets.find((item) => item.id === form.presetId);
+  return preset ? presetDescription(preset) : t("server.customConfigPresetHelp");
+}
+
+function presetLabelForForm(form) {
+  if (form.presetId === existingConfigPresetId) {
+    return t("server.existingConfigPreset");
+  }
+  if (form.presetId === customStdioPresetId) {
+    return t("server.customStdioPreset");
+  }
+  return presetLabel(presets.find((preset) => preset.id === form.presetId) || presets[0]);
 }
 
 function App() {
@@ -696,6 +747,10 @@ function App() {
     const id = crypto.randomUUID();
     setToasts((items) => [...items, { id, title, message, type }]);
     setTimeout(() => setToasts((items) => items.filter((item) => item.id !== id)), 4200);
+  }
+
+  function dismissToast(id) {
+    setToasts((items) => items.filter((item) => item.id !== id));
   }
 
   async function request(path, options = {}) {
@@ -1070,6 +1125,12 @@ function App() {
       if (name === "name" && !serverIdTouched && shouldAutofillID(current.id, current.name)) {
         return { ...current, name: value, id: slugFromName(value) };
       }
+      if (name === "transport") {
+        let nextPresetId = current.presetId;
+        if (value === "stdio" && current.presetId === "custom-http") nextPresetId = customStdioPresetId;
+        if (value === "http" && (current.presetId === customStdioPresetId || current.presetId === existingConfigPresetId)) nextPresetId = "custom-http";
+        return { ...current, presetId: nextPresetId, [name]: value };
+      }
       return { ...current, [name]: value };
     });
   }
@@ -1117,6 +1178,27 @@ function App() {
     }));
   }
 
+  function updateArg(index, value) {
+    setForm((current) => ({
+      ...current,
+      args: current.args.length ? current.args.map((arg, i) => (i === index ? value : arg)) : [value],
+    }));
+  }
+
+  function addArg() {
+    setForm((current) => ({
+      ...current,
+      args: [...current.args, ""],
+    }));
+  }
+
+  function removeArg(index) {
+    setForm((current) => ({
+      ...current,
+      args: current.args.filter((_, i) => i !== index),
+    }));
+  }
+
   function addHeader() {
     setForm((current) => ({
       ...current,
@@ -1140,9 +1222,10 @@ function App() {
   }
 
   function openCreateServer() {
+    const transport = preferences.defaultTransport;
     setServerIdTouched(false);
     setEditingServer(false);
-    setForm({ ...initialForm, transport: preferences.defaultTransport });
+    setForm({ ...initialForm, presetId: transport === "stdio" ? customStdioPresetId : "custom-http", transport });
     setActiveView("servers");
     setServerModalOpen(true);
   }
@@ -1255,7 +1338,7 @@ function App() {
     setServerIdTouched(true);
     setEditingServer(true);
     setForm({
-      presetId: "custom-http",
+      presetId: presetIdForServer(server),
       id: server.id || "",
       name: server.name || "",
       transport: server.transport || "stdio",
@@ -1269,7 +1352,7 @@ function App() {
       password: auth.password,
       headers: headerRowsFromHeaders(server.headers),
       command: server.command || "",
-      args: (server.args || []).join(" "),
+      args: argsFromServer(server),
       weight: server.weight || 1,
       enabled: Boolean(server.enabled),
     });
@@ -1519,7 +1602,7 @@ function App() {
     return (
       <>
         <ApiLoadingBar active />
-        <ToastStack toasts={toasts} />
+        <ToastStack toasts={toasts} onDismiss={dismissToast} />
       </>
     );
   }
@@ -1528,7 +1611,7 @@ function App() {
     return (
       <>
         <ApiLoadingBar active={apiLoading} />
-        <ToastStack toasts={toasts} />
+        <ToastStack toasts={toasts} onDismiss={dismissToast} />
         <LoginPage form={loginForm} loading={loggingIn} onSubmit={login} onUpdate={(name, value) => setLoginForm((current) => ({ ...current, [name]: value }))} />
       </>
     );
@@ -1537,7 +1620,7 @@ function App() {
   return (
     <>
       <ApiLoadingBar active={apiLoading} />
-      <ToastStack toasts={toasts} />
+      <ToastStack toasts={toasts} onDismiss={dismissToast} />
       <div class={`app-shell ${preferences.denseTables ? "density-compact" : ""}`}>
         <Sidebar
           activeView={activeView}
@@ -2011,6 +2094,7 @@ function App() {
         title={editingServer ? t("modal.updateServer") : t("modal.createServer")}
         description={t("modal.serverDescription")}
         onClose={() => setServerModalOpen(false)}
+        closeOnBackdrop={false}
       >
         <ServerForm
           form={form}
@@ -2025,6 +2109,9 @@ function App() {
           }}
           onPreset={selectPreset}
           onUpdate={updateForm}
+          onArgChange={updateArg}
+          onAddArg={addArg}
+          onRemoveArg={removeArg}
           onHeaderChange={updateHeader}
           onAddHeader={addHeader}
           onRemoveHeader={removeHeader}
@@ -2097,12 +2184,16 @@ function ApiLoadingBar({ active }) {
   );
 }
 
+function BrandLogo() {
+  return <img class="brand-logo" src={logoUrl} alt="" aria-hidden="true" />;
+}
+
 function LoginPage({ form, loading, onSubmit, onUpdate }) {
   return (
     <main class="login-shell">
       <section class="login-card">
         <div class="brand-row">
-          <div class="brand-mark">M</div>
+          <BrandLogo />
           <div>
             <div class="text-sm font-bold text-slate-900">{t("brand.name")}</div>
             <div class="text-xs text-slate-500">{t("auth.platformLogin")}</div>
@@ -2177,7 +2268,7 @@ function Sidebar({ activeView, darkMode, user, onLogout, onNavigate, onToggleThe
     <>
       <aside class="module-sidebar">
         <div class="brand-row mb-5">
-          <div class="brand-mark">M</div>
+          <BrandLogo />
           <div>
             <div class="text-sm font-bold text-slate-900">{t("brand.name")}</div>
             <div class="text-xs text-slate-500">{t("nav.project")}</div>
@@ -2195,6 +2286,10 @@ function Sidebar({ activeView, darkMode, user, onLogout, onNavigate, onToggleThe
             </button>
           ))}
         </nav>
+        <div class="sidebar-resource-links">
+          <a href="/docs" target="_blank" rel="noreferrer">{t("nav.apiDocs")}</a>
+          <a href="https://github.com/mcpHQ/mcp-gateway" target="_blank" rel="noreferrer">{t("nav.github")}</a>
+        </div>
         <div class="sidebar-user-menu">
           <button class="sidebar-avatar-button" type="button">
             <span class="sidebar-avatar">{initialsForEmail(user?.email)}</span>
@@ -2241,7 +2336,7 @@ function ThemeToggle({ darkMode, onToggle }) {
   );
 }
 
-function ServerModal({ open, title, description, onClose, children }) {
+function ServerModal({ open, title, description, onClose, closeOnBackdrop = true, children }) {
   if (!open) return null;
 
   return (
@@ -2256,12 +2351,37 @@ function ServerModal({ open, title, description, onClose, children }) {
         </div>
         {children}
       </div>
-      <button class="modal-backdrop" type="button" onClick={onClose}>{t("common.close")}</button>
+      <button class="modal-backdrop" type="button" onClick={closeOnBackdrop ? onClose : undefined}>{t("common.close")}</button>
     </div>
   );
 }
 
-function ServerForm({ form, saving, testing, onSubmit, onTest, onClear, onPreset, onUpdate, onHeaderChange, onAddHeader, onRemoveHeader }) {
+function ArgList({ args, onChange, onAdd, onRemove }) {
+  const rows = args.length ? args : [""];
+  return (
+    <div class="grid gap-2">
+      {rows.map((arg, index) => (
+        <div class="join w-full" key={index}>
+          <input
+            class="input input-bordered join-item w-full"
+            value={arg}
+            placeholder={index === 0 ? t("server.placeholderArg") : ""}
+            onInput={(event) => onChange(index, event.currentTarget.value)}
+          />
+          <button class="btn btn-outline join-item" type="button" onClick={() => onRemove(index)} disabled={!args.length}>
+            {t("common.remove")}
+          </button>
+        </div>
+      ))}
+      <button class="btn btn-outline btn-sm justify-self-start" type="button" onClick={onAdd}>
+        {t("server.addArg")}
+      </button>
+    </div>
+  );
+}
+
+function ServerForm({ form, saving, testing, onSubmit, onTest, onClear, onPreset, onUpdate, onArgChange, onAddArg, onRemoveArg, onHeaderChange, onAddHeader, onRemoveHeader }) {
+  const showSyntheticPresetOption = form.presetId === existingConfigPresetId || form.presetId === customStdioPresetId;
   return (
     <form class="grid gap-6 p-6" onSubmit={onSubmit}>
       <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -2277,15 +2397,19 @@ function ServerForm({ form, saving, testing, onSubmit, onTest, onClear, onPreset
       <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Field label={t("server.preset")} wide>
           <select class="select select-bordered w-full" value={form.presetId} onChange={(event) => onPreset(event.currentTarget.value)}>
-                {presets.map((preset) => (
+            {showSyntheticPresetOption ? (
+              <option value={form.presetId}>{presetLabelForForm(form)}</option>
+            ) : null}
+            {presets.map((preset) => (
               <option key={preset.id} value={preset.id}>
-                    {presetLabel(preset)}
+                {presetLabel(preset)}
               </option>
             ))}
           </select>
-          <p class="mt-2 text-xs text-slate-500">
-            {t("server.presetHelp")}
-          </p>
+          <div class="mt-3 rounded-2xl border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
+            <div class="font-bold">{presetLabelForForm(form)}</div>
+            <p class="mt-1 text-xs leading-relaxed text-blue-700">{presetDescriptionForForm(form)}</p>
+          </div>
         </Field>
         <Field label={t("server.transport")}>
           <select class="select select-bordered w-full" value={form.transport} onChange={(event) => onUpdate("transport", event.currentTarget.value)}>
@@ -2334,8 +2458,12 @@ function ServerForm({ form, saving, testing, onSubmit, onTest, onClear, onPreset
               <input class="input input-bordered w-full" required value={form.command} placeholder={t("server.placeholderCommand")} onInput={(event) => onUpdate("command", event.currentTarget.value)} />
             </Field>
             <Field label={t("server.args")} wide>
-              <input class="input input-bordered w-full" value={form.args} placeholder={t("server.placeholderArgs")} onInput={(event) => onUpdate("args", event.currentTarget.value)} />
+              <ArgList args={form.args} onChange={onArgChange} onAdd={onAddArg} onRemove={onRemoveArg} />
+              <p class="mt-2 text-xs text-slate-500">{t("server.argsHelp")}</p>
             </Field>
+            <div class="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600 md:col-span-2 xl:col-span-4">
+              <span class="font-bold text-slate-900">{t("auth.title")}:</span> {t("server.stdioAuthHelp")}
+            </div>
           </>
         )}
       </div>
@@ -3073,15 +3201,18 @@ function SkeletonList() {
   );
 }
 
-function ToastStack({ toasts }) {
+function ToastStack({ toasts, onDismiss }) {
   return (
     <div class="toast toast-top toast-end z-50">
       {toasts.map((item) => (
-        <div key={item.id} class={`alert ${item.type === "error" ? "alert-error" : item.type === "warning" ? "alert-warning" : "alert-success"} max-w-sm shadow-lg`}>
-          <div>
+        <div key={item.id} class={`alert ${item.type === "error" ? "alert-error" : item.type === "warning" ? "alert-warning" : "alert-success"} max-w-sm items-start shadow-lg`}>
+          <div class="min-w-0">
             <h3 class="font-bold">{item.title}</h3>
             {item.message ? <div class="text-sm">{item.message}</div> : null}
           </div>
+          <button class="btn btn-circle btn-ghost btn-xs" type="button" onClick={() => onDismiss(item.id)} aria-label={t("aria.dismissNotification")}>
+            {t("common.closeIcon")}
+          </button>
         </div>
       ))}
     </div>

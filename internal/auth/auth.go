@@ -20,6 +20,7 @@ const (
 	DefaultAdminPassword = "admin"
 	DefaultIssuer        = "mcp-gateway"
 	DefaultTTL           = 24 * time.Hour
+	jwtSecretSettingKey  = "auth.jwt_secret"
 )
 
 var (
@@ -73,12 +74,9 @@ func NewService(store *config.Store, cfg Config) (*Service, error) {
 		cfg.TTL = DefaultTTL
 	}
 
-	secret := []byte(strings.TrimSpace(cfg.JWTSecret))
-	if len(secret) == 0 {
-		secret = make([]byte, 32)
-		if _, err := rand.Read(secret); err != nil {
-			return nil, fmt.Errorf("generate jwt secret: %w", err)
-		}
+	secret, err := jwtSecret(store, cfg.JWTSecret)
+	if err != nil {
+		return nil, err
 	}
 
 	service := &Service{
@@ -91,6 +89,31 @@ func NewService(store *config.Store, cfg Config) (*Service, error) {
 		return nil, err
 	}
 	return service, nil
+}
+
+func jwtSecret(store *config.Store, configuredSecret string) ([]byte, error) {
+	secret := strings.TrimSpace(configuredSecret)
+	if secret != "" {
+		return []byte(secret), nil
+	}
+
+	secret, ok, err := store.GetSetting(jwtSecretSettingKey)
+	if err != nil {
+		return nil, fmt.Errorf("load jwt secret: %w", err)
+	}
+	if ok && strings.TrimSpace(secret) != "" {
+		return []byte(secret), nil
+	}
+
+	randomSecret := make([]byte, 32)
+	if _, err := rand.Read(randomSecret); err != nil {
+		return nil, fmt.Errorf("generate jwt secret: %w", err)
+	}
+	encodedSecret := base64.RawURLEncoding.EncodeToString(randomSecret)
+	if err := store.UpsertSetting(jwtSecretSettingKey, encodedSecret); err != nil {
+		return nil, fmt.Errorf("persist jwt secret: %w", err)
+	}
+	return []byte(encodedSecret), nil
 }
 
 func (s *Service) Login(email string, password string) (Session, error) {

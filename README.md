@@ -1,124 +1,108 @@
 # MCP Gateway
 
-A lightweight open source MVP for running a Go-based MCP gateway with a built-in web UI.
+MCP Gateway is an open source control plane for Model Context Protocol servers. It lets you connect remote HTTP MCP servers and local stdio MCP servers, discover their tools, group them into client-facing endpoints, and expose those endpoints through one lightweight Go service with a built-in web UI.
 
-The gateway manages remote HTTP MCP servers or local stdio MCP servers, groups them into endpoints, lists their tools, and forwards `tools/call` requests through scoped endpoint URLs.
+Use it when your agents need access to many tools, but you do not want every client to manage every MCP server, secret, rate limit, and tool catalog directly.
+
+## The Problem We Solve
+
+MCP makes tools portable, but real deployments quickly become hard to manage:
+
+- Teams end up with many MCP servers spread across local processes, hosted APIs, and vendor endpoints.
+- Every client needs separate configuration for server URLs, commands, headers, tokens, and environment variables.
+- Tool catalogs get noisy, duplicated, or stale as servers are added and restarted.
+- There is no simple place to group tools by use case, apply endpoint-level limits, issue client keys, or inspect usage.
+- Operators need audit logs, health checks, and a UI without turning a small tool gateway into a large platform project.
+
+MCP Gateway puts a small, inspectable layer in front of your MCP servers. It centralizes server registration, tool discovery, endpoint scoping, usage tracking, and administration while still speaking MCP-compatible JSON-RPC to clients.
 
 ## Features
 
-- Single Go binary with embedded UI.
-- Preact, Tailwind CSS, and DaisyUI frontend.
-- SQLite-backed server registry for upstream HTTP and stdio MCP servers.
-- REST API for adding, deleting, restarting, and listing servers and endpoints.
-- Endpoint groups that expose selected MCP servers behind scoped MCP URLs with endpoint-level usage and rate limits.
-- Persisted tool catalog and usage counters so refreshes or restarts do not reset the dashboard.
-- Cached tool discovery across enabled upstream servers with manual refresh.
-- MCP-style HTTP JSON-RPC endpoints for `initialize`, `tools/list`, and `tools/call`.
+- Single Go binary with embedded Preact, Tailwind CSS, and DaisyUI admin UI.
+- SQLite-backed configuration, migrations, tool catalog, usage counters, rate-limit buckets, users, API keys, and audit logs.
+- Support for remote HTTP MCP servers and local stdio MCP servers.
+- HTTP upstream authentication with `none`, `apiKey`, `bearer`, `jwtBearer`, and `basic` modes.
+- Environment variable interpolation for sensitive upstream values such as `${GITHUB_TOKEN}`.
+- Server lifecycle management: create, test, enable, disable, restart, delete, and refresh tools.
+- Endpoint groups that expose selected MCP servers behind scoped URLs such as `/mcp/dev-tools`.
+- Endpoint-level usage counters and SQLite-backed requests-per-minute rate limits.
+- API keys that can be mapped to endpoint resources for client access control.
+- Persisted tool discovery so dashboards and tool lists survive restarts.
+- MCP JSON-RPC routes for `initialize`, `tools/list`, and endpoint-scoped `tools/call`.
+- Built-in gateway meta-tools for listing servers, searching tools, refreshing the catalog, and invoking upstream tools.
+- Admin login, password change, JWT sessions, and configurable initial admin credentials.
+- Audit log for recent REST and MCP tool calls.
+- REST admin API with OpenAPI docs served through Scalar at `/docs`.
+- Spec-first backend workflow using `api/openapi.yaml` and generated Go API types.
 
-## Run
+## How It Works
+
+1. Register upstream MCP servers in the UI or REST API.
+2. The gateway starts enabled servers and discovers their tools.
+3. Tools are stored with gateway-safe names like `<server_id>__<tool_name>` to avoid collisions.
+4. Create endpoints that group one or more servers for a specific agent, app, team, or workflow.
+5. MCP clients call `/mcp/{endpointId}` to list and invoke only the tools attached to that endpoint.
+6. The gateway records usage, enforces endpoint rate limits, and writes audit events.
+
+## Quick Start
+
+Run the gateway:
 
 ```bash
 go run . -addr :8080
 ```
 
-Open http://localhost:8080.
+Open http://localhost:8080 and sign in with the default admin account:
 
-On first run, the app creates `mcp-gateway.db` if it does not already exist. Embedded SQL migrations in `internal/config/migrations` are applied automatically on startup.
-
-## Frontend
-
-The UI is built with Preact, Vite, Tailwind CSS, and DaisyUI. Built assets are emitted into `internal/web/static` so Go can embed them.
-
-Install dependencies:
-
-```bash
-npm install
+```text
+Email: admin@mcphq.org
+Password: admin
 ```
 
-Run the frontend build:
+On first run, the app creates `mcp-gateway.db` and applies embedded SQL migrations from `internal/config/migrations`.
+
+You can override runtime settings with flags or environment variables:
 
 ```bash
-npm run build
+go run . \
+  -addr :8080 \
+  -db mcp-gateway.db \
+  -admin-email "$MCP_GATEWAY_ADMIN_EMAIL" \
+  -admin-password "$MCP_GATEWAY_ADMIN_PASSWORD" \
+  -jwt-secret "$MCP_GATEWAY_JWT_SECRET"
 ```
 
-For frontend-only development:
-
-```bash
-npm run dev
-```
+The admin password flag is used when seeding the initial admin user. Change the password from the UI after first login.
 
 ## Configure A Server
 
-Use the UI or the REST API. The gateway stores servers in SQLite.
+Use the UI for the fastest setup. Presets are defined in `ui/src/mcp-presets.json` and include custom HTTP MCP, GitHub Remote MCP, filesystem stdio, and memory stdio examples.
 
-The UI presets are defined in `ui/src/mcp-presets.json`. Choose a preset to prefill the form, or choose **Custom HTTP MCP** to enter any hosted MCP server URL.
+You can also use the REST API. Admin API routes require a bearer token from `/api/auth/login`.
 
 ```bash
 curl -X POST http://localhost:8080/api/servers \
+  -H 'Authorization: Bearer <admin-token>' \
   -H 'Content-Type: application/json' \
   -d '{
     "id": "github",
     "name": "GitHub MCP",
     "transport": "http",
     "url": "https://api.githubcopilot.com/mcp/",
-    "headers": {
-      "Authorization": "Bearer ${GITHUB_TOKEN}"
+    "auth": {
+      "type": "bearer",
+      "token": "${GITHUB_TOKEN}"
     },
     "enabled": true,
     "weight": 1
   }'
 ```
 
-Header values support environment variables like `${GITHUB_TOKEN}`.
-
-HTTP servers support these auth modes:
-
-- `none`
-- `apiKey`
-- `bearer`
-- `jwtBearer`
-- `basic`
-
-Bearer example:
-
-```json
-{
-  "auth": {
-    "type": "bearer",
-    "token": "${GITHUB_TOKEN}"
-  }
-}
-```
-
-API key example:
-
-```json
-{
-  "auth": {
-    "type": "apiKey",
-    "apiKeyName": "X-API-Key",
-    "apiKeyValue": "${API_KEY}",
-    "apiKeyIn": "header"
-  }
-}
-```
-
-Basic auth example:
-
-```json
-{
-  "auth": {
-    "type": "basic",
-    "username": "${BASIC_USER}",
-    "password": "${BASIC_PASSWORD}"
-  }
-}
-```
-
-Local stdio MCP servers are still supported:
+Local stdio MCP servers are supported too:
 
 ```bash
 curl -X POST http://localhost:8080/api/servers \
+  -H 'Authorization: Bearer <admin-token>' \
   -H 'Content-Type: application/json' \
   -d '{
     "id": "filesystem",
@@ -134,12 +118,13 @@ curl -X POST http://localhost:8080/api/servers \
 
 ## Configure An Endpoint
 
-Endpoints group one or more MCP servers into a scoped client-facing MCP URL. Endpoint usage and rate limits are tracked at the endpoint, while MCP server records keep usage only for upstream observability.
+Endpoints group one or more MCP servers into a scoped client-facing MCP URL. Endpoint usage and rate limits are tracked at the endpoint, while server records keep usage for upstream observability.
 
-Endpoint rate limits use a SQLite-backed token bucket keyed by endpoint ID. `requestsPerMinute` controls both the refill rate and the default burst capacity, so a value of `60` allows a burst of up to 60 requests and then refills at about one request per second. Multiple gateway replicas can share the same limit when they point at the same SQLite database file, but Kubernetes deployments must use storage with reliable SQLite file locking; high-throughput multi-replica deployments should prefer a dedicated shared limiter backend such as Redis.
+`requestsPerMinute` controls both the refill rate and default burst capacity. For example, `60` allows a burst of up to 60 requests and then refills at about one request per second.
 
 ```bash
 curl -X POST http://localhost:8080/api/endpoints \
+  -H 'Authorization: Bearer <admin-token>' \
   -H 'Content-Type: application/json' \
   -d '{
     "id": "dev-tools",
@@ -153,7 +138,7 @@ curl -X POST http://localhost:8080/api/endpoints \
   }'
 ```
 
-Use the scoped MCP endpoint:
+List tools through the scoped MCP endpoint:
 
 ```bash
 curl -X POST http://localhost:8080/mcp/dev-tools \
@@ -161,61 +146,7 @@ curl -X POST http://localhost:8080/mcp/dev-tools \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
 ```
 
-## API
-
-```bash
-curl http://localhost:8080/healthz
-curl http://localhost:8080/api/servers
-curl http://localhost:8080/api/endpoints
-curl http://localhost:8080/api/tools
-curl -X POST http://localhost:8080/api/tools/refresh
-```
-
-Call a tool through an endpoint:
-
-```bash
-curl -X POST http://localhost:8080/api/endpoints/dev-tools/tools/github__search_repositories/call \
-  -H 'Content-Type: application/json' \
-  -d '{"arguments":{"query":"mcp gateway","perPage":5}}'
-```
-
-## Spec-First API Workflow
-
-The backend API contract is defined in `api/openapi.yaml`. Update that spec first when adding or changing REST admin routes or MCP JSON-RPC HTTP shapes, then regenerate the Go API types:
-
-```bash
-make generate
-```
-
-Before opening a PR, run:
-
-```bash
-make check
-```
-
-Generated Go types are written to `internal/web/openapi.gen.go`. The current implementation keeps the existing `net/http` route behavior in `internal/web/handler.go` while using generated types at low-risk HTTP boundaries.
-
-## Gateway Meta-Tools
-
-The gateway exposes five built-in tools in the global catalog to reduce context bloat:
-
-- `gateway_list_servers`: list configured upstream servers and status.
-- `gateway_list_tools`: list upstream tools, optionally scoped by `serverId`.
-- `gateway_search_tools`: search tools by keyword.
-- `gateway_refresh_tools`: refresh the cached upstream tool catalog, optionally scoped by `serverId`.
-- `gateway_invoke`: invoke an upstream tool by `toolName` or `serverId` plus `nativeName`.
-
-Direct tool calls through `/api/tools/{name}/call` are disabled so clients cannot bypass endpoint usage and rate limits.
-
-Use the global MCP JSON-RPC endpoint to inspect the catalog:
-
-```bash
-curl -X POST http://localhost:8080/mcp \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
-```
-
-Use a scoped endpoint JSON-RPC route:
+Call a tool through the scoped MCP endpoint:
 
 ```bash
 curl -X POST http://localhost:8080/mcp/dev-tools \
@@ -223,12 +154,113 @@ curl -X POST http://localhost:8080/mcp/dev-tools \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"github__search_repositories","arguments":{"query":"mcp gateway"}}}'
 ```
 
-## Notes
+## API Keys
+
+API keys can be created in the UI or REST API and mapped to endpoint IDs. Client REST routes for endpoint tools use the `X-API-Key` header.
+
+```bash
+curl -X POST http://localhost:8080/api/api-keys \
+  -H 'Authorization: Bearer <admin-token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "id": "dev-agent",
+    "name": "Dev Agent",
+    "value": "replace-with-a-generated-secret",
+    "endpointIds": ["dev-tools"],
+    "enabled": true
+  }'
+```
+
+Call a tool through the REST endpoint route:
+
+```bash
+curl -X POST http://localhost:8080/api/endpoints/dev-tools/tools/github__search_repositories/call \
+  -H 'X-API-Key: replace-with-a-generated-secret' \
+  -H 'Content-Type: application/json' \
+  -d '{"arguments":{"query":"mcp gateway","perPage":5}}'
+```
+
+## Gateway Meta-Tools
+
+The global MCP catalog exposes built-in meta-tools that help clients inspect and use the gateway without loading every upstream tool into context:
+
+- `gateway_list_servers`: list configured upstream servers and status.
+- `gateway_list_tools`: list upstream tools, optionally scoped by `serverId`.
+- `gateway_search_tools`: search tools by keyword.
+- `gateway_refresh_tools`: refresh the cached upstream tool catalog, optionally scoped by `serverId`.
+- `gateway_invoke`: invoke an upstream tool by `toolName` or `serverId` plus `nativeName`.
+
+Use `/mcp` to inspect the global catalog:
+
+```bash
+curl -X POST http://localhost:8080/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+```
+
+Tool calls must use `/mcp/{endpointId}` so endpoint usage and rate limits are enforced.
+
+## Admin API And Docs
+
+Open the API documentation at http://localhost:8080/docs. The raw OpenAPI document is served at http://localhost:8080/openapi.yaml.
+
+Useful routes:
+
+```bash
+curl http://localhost:8080/healthz
+curl -H 'Authorization: Bearer <admin-token>' http://localhost:8080/api/servers
+curl -H 'Authorization: Bearer <admin-token>' http://localhost:8080/api/endpoints
+curl -H 'Authorization: Bearer <admin-token>' http://localhost:8080/api/api-keys
+curl -H 'Authorization: Bearer <admin-token>' http://localhost:8080/api/tools
+curl -H 'Authorization: Bearer <admin-token>' http://localhost:8080/api/audit-logs
+curl -X POST -H 'Authorization: Bearer <admin-token>' http://localhost:8080/api/tools/refresh
+```
+
+## Frontend Development
+
+The UI is built with Preact, Vite, Tailwind CSS, and DaisyUI. Built assets are emitted into `internal/web/static` so Go can embed them.
+
+```bash
+npm install
+npm run dev
+```
+
+Build embedded frontend assets:
+
+```bash
+npm run build
+```
+
+## Backend Development
+
+Common commands:
+
+```bash
+make run
+make test
+make check
+```
+
+The backend API contract is defined in `api/openapi.yaml`. Update the spec first when adding or changing REST admin routes or MCP JSON-RPC HTTP shapes, then regenerate Go API types:
+
+```bash
+make generate
+```
+
+Generated Go types are written to `internal/web/openapi.gen.go`. The current implementation keeps the existing `net/http` route behavior in `internal/web/handler.go` while using generated types at low-risk HTTP boundaries.
+
+## Operational Notes
 
 - HTTP upstream servers are called with JSON-RPC over POST.
 - Local upstream servers are launched as child processes using stdio MCP framing.
-- Gateway tool names are prefixed as `<server_id>__<tool_name>` to avoid collisions.
-- MCP servers expose usage only; rate limits are configured and enforced on endpoints.
-- Tool discovery results and usage counters are persisted in SQLite.
-- `/mcp` can list the global catalog, but tool calls must use `/mcp/{endpointId}` so endpoint usage and rate limits are enforced.
-- `weight` is stored for routing policies, but the MVP routes explicitly by prefixed tool name.
+- Tool discovery results, usage counters, and audit logs are persisted in SQLite.
+- Endpoint rate limits use a SQLite-backed token bucket keyed by endpoint ID.
+- Multiple gateway replicas can share limits only when they point at the same SQLite database file and the storage layer provides reliable SQLite file locking.
+- High-throughput multi-replica deployments should prefer a dedicated shared limiter backend in the future.
+- `weight` is stored for future routing policies; the current gateway routes explicitly by prefixed tool name.
+
+## Project Status
+
+MCP Gateway is an early OSS project. The core gateway, admin UI, SQLite persistence, OpenAPI workflow, endpoint scoping, API keys, usage metrics, and audit logging are in place, but production-hardening work is still ongoing.
+
+Contributions are welcome, especially around deployment examples, additional auth integrations, richer gateway policies, test coverage, and MCP client compatibility.

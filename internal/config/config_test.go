@@ -32,7 +32,7 @@ func TestLoadStoreAppliesMigrationsIdempotently(t *testing.T) {
 		t.Fatal("expected at least one applied migration")
 	}
 
-	for _, table := range []string{"servers", "endpoints", "api_keys", "tool_cache", "usage_counters", "rate_limit_buckets", "audit_logs"} {
+	for _, table := range []string{"servers", "endpoints", "api_keys", "tool_cache", "usage_counters", "rate_limit_buckets", "audit_logs", "app_settings"} {
 		var name string
 		if err := store.db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name); err != nil {
 			t.Fatalf("expected table %s: %v", table, err)

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rajdas/mcp-gateway/api"
 	"github.com/rajdas/mcp-gateway/internal/auth"
 	"github.com/rajdas/mcp-gateway/internal/config"
 	"github.com/rajdas/mcp-gateway/internal/gateway"
@@ -56,6 +57,24 @@ type authSessionResponse struct {
 	Token string           `json:"token"`
 	User  authUserResponse `json:"user"`
 }
+
+const scalarDocsHTML = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MCP Gateway API Docs</title>
+    <style>
+      body {
+        margin: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <script id="api-reference" data-url="/openapi.yaml"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+  </body>
+</html>`
 
 type meResponse struct {
 	User authUserResponse `json:"user"`
@@ -99,10 +118,24 @@ func NewHandler(gw *gateway.Gateway, authServices ...*auth.Service) http.Handler
 	mux.HandleFunc("GET /api/audit-logs", h.auditLogs)
 	mux.HandleFunc("POST /mcp/{endpointId}", h.mcpEndpoint)
 	mux.HandleFunc("POST /mcp", h.mcp)
+	mux.HandleFunc("GET /openapi.yaml", h.openapi)
+	mux.HandleFunc("GET /docs", h.docs)
 
 	files, _ := fs.Sub(staticFS, "static")
 	mux.Handle("/", withStaticCache(http.FileServer(http.FS(files))))
 	return withCORS(withLogging(h.withAuth(mux)))
+}
+
+func (h *handler) docs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	_, _ = w.Write([]byte(scalarDocsHTML))
+}
+
+func (h *handler) openapi(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	_, _ = w.Write(api.Spec)
 }
 
 func (h *handler) health(w http.ResponseWriter, r *http.Request) {

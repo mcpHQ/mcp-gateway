@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	openapi "github.com/rajdas/mcp-gateway/api"
 	"github.com/rajdas/mcp-gateway/internal/auth"
 	"github.com/rajdas/mcp-gateway/internal/config"
 	"github.com/rajdas/mcp-gateway/internal/gateway"
@@ -377,6 +378,44 @@ func TestOpenAPISpecDocumentsCompatibilityRoutes(t *testing.T) {
 	} {
 		if !strings.Contains(string(spec), want) {
 			t.Fatalf("expected OpenAPI spec to include %q", want)
+		}
+	}
+}
+
+func TestEmbeddedOpenAPISpecMatchesSource(t *testing.T) {
+	spec, err := os.ReadFile("../../api/openapi.yaml")
+	if err != nil {
+		t.Fatalf("read OpenAPI spec: %v", err)
+	}
+	if !bytes.Equal(openapi.Spec, spec) {
+		t.Fatal("embedded OpenAPI spec does not match api/openapi.yaml")
+	}
+}
+
+func TestScalarDocsRoutes(t *testing.T) {
+	handler := NewHandler(nil)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/openapi.yaml", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected OpenAPI spec status %d, got %d", http.StatusOK, rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "application/yaml") {
+		t.Fatalf("expected yaml content type, got %q", got)
+	}
+	if !strings.Contains(rec.Body.String(), "title: MCP Gateway API") {
+		t.Fatalf("expected OpenAPI spec response, got %q", rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/docs", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected docs status %d, got %d", http.StatusOK, rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"@scalar/api-reference", `data-url="/openapi.yaml"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected docs page to include %q", want)
 		}
 	}
 }

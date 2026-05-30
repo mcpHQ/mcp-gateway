@@ -139,6 +139,7 @@ func LoadStore(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(1)
 
 	store := &Store{path: path, db: db}
 	if err := store.migrate(); err != nil {
@@ -155,6 +156,33 @@ func (s *Store) Path() string {
 
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+func (s *Store) GetSetting(key string) (string, bool, error) {
+	var value string
+	err := s.db.QueryRow(`
+		SELECT value
+		FROM app_settings
+		WHERE key = ?
+	`, strings.TrimSpace(key)).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return value, true, nil
+}
+
+func (s *Store) UpsertSetting(key string, value string) error {
+	_, err := s.db.Exec(`
+		INSERT INTO app_settings (key, value, updated_at)
+		VALUES (?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(key) DO UPDATE SET
+			value = excluded.value,
+			updated_at = CURRENT_TIMESTAMP
+	`, strings.TrimSpace(key), value)
+	return err
 }
 
 func (s *Store) List() []Server {

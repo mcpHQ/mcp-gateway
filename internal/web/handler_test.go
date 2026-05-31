@@ -226,6 +226,79 @@ func TestCallEndpointToolRequiresClientAPIKey(t *testing.T) {
 	}
 }
 
+func TestEndpointCurlOptionsExposeAuthorizedAPIKeyValues(t *testing.T) {
+	store, authService := newAuthTestStore(t)
+	gw := gateway.New(store)
+	defer gw.Close()
+	if err := gw.UpsertServer(t.Context(), config.Server{
+		ID:        "github",
+		Name:      "GitHub MCP",
+		Transport: "http",
+		URL:       "https://example.com/mcp",
+		Enabled:   false,
+		Weight:    1,
+	}); err != nil {
+		t.Fatalf("upsert server: %v", err)
+	}
+	if err := gw.UpsertEndpoint(config.Endpoint{
+		ID:        "dev",
+		Name:      "Developer Tools",
+		ServerIDs: []string{"github"},
+		Enabled:   true,
+	}); err != nil {
+		t.Fatalf("upsert endpoint: %v", err)
+	}
+	if err := gw.UpsertEndpoint(config.Endpoint{
+		ID:        "ops",
+		Name:      "Ops Tools",
+		ServerIDs: []string{"github"},
+		Enabled:   true,
+	}); err != nil {
+		t.Fatalf("upsert endpoint: %v", err)
+	}
+	if err := gw.UpsertAPIKey(config.APIKey{
+		ID:          "dev-client",
+		Name:        "Dev Client",
+		Value:       "sk_dev_client",
+		EndpointIDs: []string{"dev"},
+		Enabled:     true,
+	}); err != nil {
+		t.Fatalf("upsert dev api key: %v", err)
+	}
+	if err := gw.UpsertAPIKey(config.APIKey{
+		ID:          "ops-client",
+		Name:        "Ops Client",
+		Value:       "sk_ops_client",
+		EndpointIDs: []string{"ops"},
+		Enabled:     true,
+	}); err != nil {
+		t.Fatalf("upsert ops api key: %v", err)
+	}
+
+	handler := NewHandler(gw, authService)
+	token := loginForToken(t, handler, auth.DefaultAdminEmail, auth.DefaultAdminPassword)
+	req := httptest.NewRequest(http.MethodGet, "/api/endpoints/dev/curl", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected curl options status %d, got %d body %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var payload struct {
+		APIKeys []gateway.EndpointAPIKeyOption `json:"apiKeys"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode curl options: %v", err)
+	}
+	if len(payload.APIKeys) != 1 {
+		t.Fatalf("expected one api key option, got %#v", payload.APIKeys)
+	}
+	if payload.APIKeys[0].ID != "dev-client" || payload.APIKeys[0].Value != "sk_dev_client" {
+		t.Fatalf("unexpected api key option: %#v", payload.APIKeys[0])
+	}
+}
+
 func TestEndpointToolCallsCreateAuditLogs(t *testing.T) {
 	store, authService := newAuthTestStore(t)
 	upstream := newTestMCPServer(t, "")
@@ -303,6 +376,66 @@ func TestEndpointToolCallsCreateAuditLogs(t *testing.T) {
 	}
 	if !strings.Contains(log.RawCall, `"name": "alpha"`) {
 		t.Fatalf("expected raw upstream MCP call in audit log, got %q", log.RawCall)
+	}
+}
+
+func TestMCPToolsListCreatesAuditLog(t *testing.T) {
+	store, authService := newAuthTestStore(t)
+	upstream := newTestMCPServer(t, "")
+	gw := gateway.New(store)
+	defer gw.Close()
+	if err := gw.UpsertServer(t.Context(), config.Server{
+		ID:        "test",
+		Name:      "Test MCP",
+		Transport: "http",
+		URL:       upstream.URL,
+		Enabled:   true,
+		Weight:    1,
+	}); err != nil {
+		t.Fatalf("upsert server: %v", err)
+	}
+	if err := gw.UpsertEndpoint(config.Endpoint{
+		ID:        "dev",
+		Name:      "Dev Tools",
+		ServerIDs: []string{"test"},
+		Enabled:   true,
+	}); err != nil {
+		t.Fatalf("upsert endpoint: %v", err)
+	}
+	handler := NewHandler(gw, authService)
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp/dev", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "sk_test_client_key")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected mcp status %d, got %d body %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	token := loginForToken(t, handler, auth.DefaultAdminEmail, auth.DefaultAdminPassword)
+	req = httptest.NewRequest(http.MethodGet, "/api/audit-logs", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected audit log status %d, got %d body %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		AuditLogs []gateway.AuditLog `json:"auditLogs"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode audit logs: %v", err)
+	}
+	if len(payload.AuditLogs) != 1 {
+		t.Fatalf("expected one audit log, got %#v", payload.AuditLogs)
+	}
+	log := payload.AuditLogs[0]
+	if log.Transport != "mcp" || log.EndpointID != "dev" || log.ToolName != "tools/list" || log.Status != http.StatusOK {
+		t.Fatalf("unexpected audit log: %#v", log)
+	}
+	if !strings.Contains(log.RawCall, `"method": "tools/list"`) {
+		t.Fatalf("expected raw MCP request in audit log, got %q", log.RawCall)
 	}
 }
 
@@ -534,6 +667,25 @@ func loginForToken(t *testing.T, handler http.Handler, email string, password st
 		t.Fatal("expected login token")
 	}
 	return payload.Token
+}
+
+func TestSPAClientRoutesServeIndexHTML(t *testing.T) {
+	handler := NewHandler(nil)
+	for _, path := range []string{"/", "/overview", "/servers/github-mcp", "/endpoints/dev"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("path %s: expected status 200, got %d", path, rec.Code)
+		}
+		if !strings.Contains(rec.Header().Get("Content-Type"), "text/html") {
+			t.Fatalf("path %s: expected html content type, got %q", path, rec.Header().Get("Content-Type"))
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, `id="app"`) {
+			t.Fatalf("path %s: expected embedded SPA shell, got %q", path, body)
+		}
+	}
 }
 
 func assertLoginStatus(t *testing.T, handler http.Handler, email string, password string, want int) {

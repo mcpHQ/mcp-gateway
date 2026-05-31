@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -60,6 +61,12 @@ type APIKeyStatus struct {
 	HasValue    bool     `json:"hasValue"`
 	CreatedAt   string   `json:"createdAt,omitempty"`
 	UpdatedAt   string   `json:"updatedAt,omitempty"`
+}
+
+type EndpointAPIKeyOption struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 type AuditLog struct {
@@ -350,6 +357,32 @@ func (g *Gateway) APIKeys() []APIKeyStatus {
 	return out
 }
 
+func (g *Gateway) EndpointAPIKeyOptions(endpointID string) ([]EndpointAPIKeyOption, error) {
+	endpointID = strings.TrimSpace(endpointID)
+	if _, ok := g.cachedEndpoint(endpointID); !ok {
+		return nil, errors.New("endpoint not found")
+	}
+
+	keys := g.store.ListAPIKeys()
+	out := make([]EndpointAPIKeyOption, 0, len(keys))
+	for _, key := range keys {
+		if !key.Enabled || strings.TrimSpace(key.Value) == "" {
+			continue
+		}
+		for _, allowed := range key.EndpointIDs {
+			if allowed == endpointID {
+				out = append(out, EndpointAPIKeyOption{
+					ID:    key.ID,
+					Name:  key.Name,
+					Value: key.Value,
+				})
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
 func (g *Gateway) AuditLogs(limit int) ([]AuditLog, error) {
 	g.flushAuditLogs()
 
@@ -509,6 +542,9 @@ func (g *Gateway) DeleteServer(id string) bool {
 }
 
 func (g *Gateway) UpsertEndpoint(endpoint config.Endpoint) error {
+	endpointID := strings.TrimSpace(endpoint.ID)
+	_, exists := g.cachedEndpoint(endpointID)
+
 	seen := map[string]bool{}
 	for _, serverID := range endpoint.ServerIDs {
 		serverID = strings.TrimSpace(serverID)
@@ -523,10 +559,15 @@ func (g *Gateway) UpsertEndpoint(endpoint config.Endpoint) error {
 	if err := g.store.UpsertEndpoint(endpoint); err != nil {
 		return err
 	}
-	if stored, ok := g.store.GetEndpoint(strings.TrimSpace(endpoint.ID)); ok {
+	if stored, ok := g.store.GetEndpoint(endpointID); ok {
 		endpoint = stored
 	}
 	g.cacheEndpoint(endpoint)
+	if !exists {
+		if err := g.ensureDefaultAPIKeyForEndpoint(endpoint); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -1472,6 +1513,53 @@ func cloneEndpointConfig(endpoint config.Endpoint) config.Endpoint {
 func cloneAPIKeyConfig(key config.APIKey) config.APIKey {
 	key.EndpointIDs = append([]string(nil), key.EndpointIDs...)
 	return key
+}
+
+func (g *Gateway) ensureDefaultAPIKeyForEndpoint(endpoint config.Endpoint) error {
+	keyID := defaultAPIKeyIDForEndpoint(endpoint.ID)
+	if _, ok := g.cachedAPIKey(keyID); ok {
+		return nil
+	}
+
+	value, err := generateAPIKeyValue()
+	if err != nil {
+		return err
+	}
+
+	name := strings.TrimSpace(endpoint.Name)
+	if name == "" {
+		name = endpoint.ID
+	}
+
+	return g.UpsertAPIKey(config.APIKey{
+		ID:          keyID,
+		Name:        name + " API Key",
+		Value:       value,
+		EndpointIDs: []string{endpoint.ID},
+		Enabled:     true,
+	})
+}
+
+func defaultAPIKeyIDForEndpoint(endpointID string) string {
+	const suffix = "-client"
+	endpointID = strings.TrimSpace(endpointID)
+	if len(endpointID)+len(suffix) <= 63 {
+		return endpointID + suffix
+	}
+	return endpointID[:63-len(suffix)] + suffix
+}
+
+func generateAPIKeyValue() (string, error) {
+	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("generate api key value: %w", err)
+	}
+	out := make([]byte, 32)
+	for i, b := range bytes {
+		out[i] = alphabet[int(b)%len(alphabet)]
+	}
+	return "sk_" + string(out), nil
 }
 
 func cloneStringMap(values map[string]string) map[string]string {

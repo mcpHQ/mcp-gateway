@@ -327,6 +327,21 @@ paths:
           $ref: "#/components/responses/RestError"
         "404":
           $ref: "#/components/responses/RestError"
+  /api/endpoints/{id}/curl:
+    get:
+      operationId: getEndpointCurlOptions
+      summary: Get API key values for endpoint cURL copy snippets
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: API keys that can be used to call this endpoint.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EndpointCurlOptionsResponse"
+        "404":
+          $ref: "#/components/responses/RestError"
   /api/endpoints/{id}/tools:
     get:
       operationId: listEndpointTools
@@ -641,6 +656,29 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/APIKeyStatus"
+    EndpointCurlAPIKey:
+      type: object
+      required:
+        - id
+        - name
+        - value
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        value:
+          type: string
+          description: Secret API key value for the selected endpoint cURL snippet.
+    EndpointCurlOptionsResponse:
+      type: object
+      required:
+        - apiKeys
+      properties:
+        apiKeys:
+          type: array
+          items:
+            $ref: "#/components/schemas/EndpointCurlAPIKey"
     AuditLog:
       type: object
       required:

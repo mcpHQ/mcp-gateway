@@ -285,6 +285,20 @@ type Endpoint struct {
 	UpdatedAt   *string    `json:"updatedAt,omitempty"`
 }
 
+// EndpointCurlAPIKey defines model for EndpointCurlAPIKey.
+type EndpointCurlAPIKey struct {
+	Id   string `json:"id"`
+	Name string `json:"name"`
+
+	// Value Secret API key value for the selected endpoint cURL snippet.
+	Value string `json:"value"`
+}
+
+// EndpointCurlOptionsResponse defines model for EndpointCurlOptionsResponse.
+type EndpointCurlOptionsResponse struct {
+	ApiKeys []EndpointCurlAPIKey `json:"apiKeys"`
+}
+
 // EndpointStatus defines model for EndpointStatus.
 type EndpointStatus struct {
 	CreatedAt   *string       `json:"createdAt,omitempty"`

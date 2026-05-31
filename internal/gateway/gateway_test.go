@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -154,6 +155,57 @@ func TestRefreshToolsKeepsStaleCatalogOnFailure(t *testing.T) {
 	}
 }
 
+func TestUpsertEndpointCreatesDefaultAPIKey(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	withFakeUpstream(t, &fakeUpstream{})
+	gw := New(store)
+	if err := gw.UpsertServer(context.Background(), testServer()); err != nil {
+		t.Fatalf("upsert server: %v", err)
+	}
+
+	if err := gw.UpsertEndpoint(config.Endpoint{
+		ID:        "dev-tools",
+		Name:      "Developer Tools",
+		ServerIDs: []string{"test"},
+		Enabled:   true,
+	}); err != nil {
+		t.Fatalf("upsert endpoint: %v", err)
+	}
+
+	keys := gw.APIKeys()
+	if len(keys) != 1 {
+		t.Fatalf("expected one api key after endpoint create, got %#v", keys)
+	}
+	if keys[0].ID != "dev-tools-client" || keys[0].Name != "Developer Tools API Key" || !keys[0].HasValue {
+		t.Fatalf("unexpected default api key metadata: %#v", keys[0])
+	}
+
+	stored, ok := store.GetAPIKey("dev-tools-client")
+	if !ok {
+		t.Fatal("expected default api key in store")
+	}
+	if stored.Value == "" || !strings.HasPrefix(stored.Value, "sk_") {
+		t.Fatalf("expected generated api key value, got %q", stored.Value)
+	}
+	if len(stored.EndpointIDs) != 1 || stored.EndpointIDs[0] != "dev-tools" {
+		t.Fatalf("expected default api key mapped to endpoint, got %#v", stored.EndpointIDs)
+	}
+
+	if err := gw.UpsertEndpoint(config.Endpoint{
+		ID:        "dev-tools",
+		Name:      "Developer Tools Updated",
+		ServerIDs: []string{"test"},
+		Enabled:   true,
+	}); err != nil {
+		t.Fatalf("update endpoint: %v", err)
+	}
+	if len(gw.APIKeys()) != 1 {
+		t.Fatalf("expected endpoint update to keep a single api key, got %#v", gw.APIKeys())
+	}
+}
+
 func TestAPIKeysRedactValuesAndPreserveExistingOnUpdate(t *testing.T) {
 	store := newTestStore(t)
 	defer store.Close()
@@ -172,42 +224,41 @@ func TestAPIKeysRedactValuesAndPreserveExistingOnUpdate(t *testing.T) {
 		t.Fatalf("upsert endpoint: %v", err)
 	}
 
-	if err := gw.UpsertAPIKey(config.APIKey{
-		ID:          "client",
-		Name:        "Client",
-		Value:       "secret-one",
-		EndpointIDs: []string{"dev"},
-		Enabled:     true,
-	}); err != nil {
-		t.Fatalf("upsert api key: %v", err)
-	}
-
 	statuses := gw.APIKeys()
 	if len(statuses) != 1 {
-		t.Fatalf("expected one api key status, got %#v", statuses)
+		t.Fatalf("expected one auto api key status, got %#v", statuses)
 	}
-	if !statuses[0].HasValue || statuses[0].ID != "client" {
-		t.Fatalf("expected redacted api key metadata with value marker, got %#v", statuses[0])
+	if !statuses[0].HasValue || statuses[0].ID != "dev-client" {
+		t.Fatalf("expected auto api key metadata, got %#v", statuses[0])
 	}
 
 	if err := gw.UpsertAPIKey(config.APIKey{
-		ID:          "client",
+		ID:          "dev-client",
 		Name:        "Client Updated",
 		EndpointIDs: []string{"dev"},
 		Enabled:     true,
 	}); err != nil {
 		t.Fatalf("upsert api key without value: %v", err)
 	}
-	stored, ok := store.GetAPIKey("client")
+	stored, ok := store.GetAPIKey("dev-client")
 	if !ok {
 		t.Fatal("expected stored api key")
 	}
-	if stored.Value != "secret-one" {
+	if stored.Value == "" {
+		t.Fatal("expected stored api key value")
+	}
+	originalValue := stored.Value
+
+	stored, ok = store.GetAPIKey("dev-client")
+	if !ok {
+		t.Fatal("expected stored api key")
+	}
+	if stored.Value != originalValue {
 		t.Fatalf("expected existing value to be preserved, got %q", stored.Value)
 	}
 
 	if err := gw.UpsertAPIKey(config.APIKey{
-		ID:          "client",
+		ID:          "dev-client",
 		Name:        "Client Updated",
 		Value:       "secret-two",
 		EndpointIDs: []string{"dev"},
@@ -215,7 +266,7 @@ func TestAPIKeysRedactValuesAndPreserveExistingOnUpdate(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("rotate api key value: %v", err)
 	}
-	stored, ok = store.GetAPIKey("client")
+	stored, ok = store.GetAPIKey("dev-client")
 	if !ok {
 		t.Fatal("expected stored api key after rotation")
 	}

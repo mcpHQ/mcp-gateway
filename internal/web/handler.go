@@ -107,6 +107,7 @@ func NewHandler(gw *gateway.Gateway, authServices ...*auth.Service) http.Handler
 	mux.HandleFunc("DELETE /api/endpoints/{id}", h.deleteEndpoint)
 	mux.HandleFunc("POST /api/endpoints/{id}/enable", h.enableEndpoint)
 	mux.HandleFunc("POST /api/endpoints/{id}/disable", h.disableEndpoint)
+	mux.HandleFunc("GET /api/endpoints/{id}/curl", h.endpointCurlOptions)
 	mux.HandleFunc("GET /api/endpoints/{id}/tools", h.endpointTools)
 	mux.HandleFunc("POST /api/endpoints/{id}/tools/{name}/call", h.callEndpointTool)
 	mux.HandleFunc("GET /api/api-keys", h.apiKeys)
@@ -122,7 +123,7 @@ func NewHandler(gw *gateway.Gateway, authServices ...*auth.Service) http.Handler
 	mux.HandleFunc("GET /docs", h.docs)
 
 	files, _ := fs.Sub(staticFS, "static")
-	mux.Handle("/", withStaticCache(http.FileServer(http.FS(files))))
+	mux.Handle("/", withStaticCache(spaFileServer(files)))
 	return withCORS(withLogging(h.withAuth(mux)))
 }
 
@@ -382,6 +383,15 @@ func (h *handler) disableEndpoint(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"endpoints": h.gw.Endpoints()})
 }
 
+func (h *handler) endpointCurlOptions(w http.ResponseWriter, r *http.Request) {
+	apiKeys, err := h.gw.EndpointAPIKeyOptions(r.PathValue("id"))
+	if err != nil {
+		writeError(w, statusForGatewayError(err), err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"apiKeys": apiKeys})
+}
+
 func (h *handler) endpointTools(w http.ResponseWriter, r *http.Request) {
 	endpointID := r.PathValue("id")
 	r, err := h.requireClientAPIKey(w, r, endpointID)
@@ -514,6 +524,7 @@ func (h *handler) mcpRPC(w http.ResponseWriter, r *http.Request, endpointID stri
 	case "notifications/initialized":
 		w.WriteHeader(http.StatusAccepted)
 	case "tools/list":
+		start := time.Now()
 		var tools []gateway.Tool
 		var err error
 		if endpointID == "" {
@@ -521,9 +532,16 @@ func (h *handler) mcpRPC(w http.ResponseWriter, r *http.Request, endpointID stri
 		} else {
 			tools, err = h.gw.EndpointTools(r.Context(), endpointID)
 		}
+		duration := time.Since(start)
 		if err != nil {
+			if endpointID != "" {
+				h.recordAuditLog(r, "mcp", endpointID, "tools/list", http.StatusBadRequest, duration, err, rawMCPRequestJSON("tools/list", req.Params))
+			}
 			writeJSON(w, http.StatusOK, rpcError(req.ID, -32000, err.Error()))
 			return
+		}
+		if endpointID != "" {
+			h.recordAuditLog(r, "mcp", endpointID, "tools/list", http.StatusOK, duration, nil, rawMCPRequestJSON("tools/list", req.Params))
 		}
 		writeJSON(w, http.StatusOK, rpcResult(req.ID, map[string]any{"tools": tools}))
 	case "tools/call":
@@ -598,6 +616,24 @@ func rawMCPToolCallJSON(gatewayName string, arguments map[string]any) string {
 			"name":      nativeName,
 			"arguments": arguments,
 		},
+	}
+	bytes, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return ""
+	}
+	return string(bytes)
+}
+
+func rawMCPRequestJSON(method string, params json.RawMessage) string {
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  method,
+	}
+	if len(params) > 0 {
+		var decoded any
+		if err := json.Unmarshal(params, &decoded); err == nil {
+			payload["params"] = decoded
+		}
 	}
 	bytes, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
@@ -769,6 +805,77 @@ func withCORS(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+var clientAppViews = []string{
+	"overview",
+	"servers",
+	"endpoints",
+	"api-keys",
+	"tools",
+	"audit-log",
+	"settings",
+	"profile",
+}
+
+func spaFileServer(fsys fs.FS) http.Handler {
+	static := http.FileServer(http.FS(fsys))
+	indexHTML, err := fs.ReadFile(fsys, "index.html")
+	if err != nil {
+		panic(fmt.Errorf("read embedded index.html: %w", err))
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			static.ServeHTTP(w, r)
+			return
+		}
+
+		path := r.URL.Path
+		if isReservedWebPath(path) {
+			static.ServeHTTP(w, r)
+			return
+		}
+
+		if path == "/" || isClientAppPath(path) {
+			if file, err := fsys.Open(strings.TrimPrefix(path, "/")); err == nil {
+				info, statErr := file.Stat()
+				_ = file.Close()
+				if statErr == nil && !info.IsDir() {
+					static.ServeHTTP(w, r)
+					return
+				}
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-cache")
+			_, _ = w.Write(indexHTML)
+			return
+		}
+
+		static.ServeHTTP(w, r)
+	})
+}
+
+func isReservedWebPath(path string) bool {
+	return strings.HasPrefix(path, "/api/") ||
+		strings.HasPrefix(path, "/mcp") ||
+		strings.HasPrefix(path, "/assets/") ||
+		path == "/openapi.yaml" ||
+		path == "/docs" ||
+		path == "/healthz"
+}
+
+func isClientAppPath(path string) bool {
+	segment := strings.TrimPrefix(path, "/")
+	if idx := strings.Index(segment, "/"); idx >= 0 {
+		segment = segment[:idx]
+	}
+	for _, view := range clientAppViews {
+		if segment == view {
+			return true
+		}
+	}
+	return false
 }
 
 func withStaticCache(next http.Handler) http.Handler {

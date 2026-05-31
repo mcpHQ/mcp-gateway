@@ -4,11 +4,57 @@ import logoUrl from "./assets/logo.png";
 import presets from "./mcp-presets.json";
 import stringsYaml from "./strings.en.yaml?raw";
 import "./style.css";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Spinner } from "@/components/ui/spinner";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { cn } from "@/lib/utils";
+import {
+  ArrowUpDown,
+  BookOpen,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  ExternalLink,
+  Key,
+  LayoutDashboard,
+  Link2,
+  MoreHorizontal,
+  Plus,
+  ScrollText,
+  Search,
+  Server,
+  Settings2,
+  Wrench,
+  X,
+} from "lucide-react";
 
 const gatewayToolsCount = 5;
 const preferencesStorageKey = "mcp-gateway-preferences";
 const authTokenStorageKey = "mcp-gateway-auth-token";
 const views = ["overview", "servers", "endpoints", "api-keys", "tools", "audit-log", "settings", "profile"];
+const detailViews = new Set(["servers", "endpoints"]);
 
 const initialLoginForm = {
   email: "admin@mcphq.org",
@@ -62,7 +108,7 @@ const initialAPIKeyForm = {
 const defaultPreferences = {
   refreshInterval: 0,
   defaultTransport: "http",
-  denseTables: false,
+  denseTables: true,
   showAdvancedControls: true,
   sortByRecent: {},
   tableColumns: {},
@@ -464,6 +510,59 @@ function apiKeyPayloadFromForm(form) {
   };
 }
 
+function shellSingleQuote(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
+
+function curlForEndpoint(endpoint, apiKey) {
+  return [
+    `curl -X POST ${shellSingleQuote(endpointUrl(endpoint))} \\`,
+    `  -H ${shellSingleQuote(`X-API-Key: ${apiKey.value}`)} \\`,
+    `  -H ${shellSingleQuote("Content-Type: application/json")} \\`,
+    `  -d ${shellSingleQuote('{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}')}`,
+  ].join("\n");
+}
+
+function restToolCallCurlForEndpoint(endpoint, apiKey, toolName) {
+  return [
+    `curl -X POST ${shellSingleQuote(`${location.origin}/api/endpoints/${endpoint.id}/tools/${encodeURIComponent(toolName)}/call`)} \\`,
+    `  -H ${shellSingleQuote(`X-API-Key: ${apiKey.value}`)} \\`,
+    `  -H ${shellSingleQuote("Content-Type: application/json")} \\`,
+    `  -d ${shellSingleQuote('{"arguments":{"query":"chaos","perPage":5}}')}`,
+  ].join("\n");
+}
+
+async function fetchExampleToolName(endpointId, apiKeyValue) {
+  try {
+    const response = await fetch(`/api/endpoints/${encodeURIComponent(endpointId)}/tools`, {
+      headers: { "X-API-Key": apiKeyValue },
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) return null;
+    const tools = payload.tools || [];
+    return tools.find((tool) => tool.name?.includes("search_repositories"))?.name || tools[0]?.name || null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
+}
+
 function generateAPIKeyValue() {
   const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   const bytes = new Uint8Array(32);
@@ -613,9 +712,39 @@ function initialTheme() {
   return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "mcp";
 }
 
-function viewFromHash() {
-  const value = window.location.hash.replace(/^#/, "");
-  return views.includes(value) ? value : "overview";
+function pathForRoute(view, resourceId = null) {
+  const safeView = views.includes(view) ? view : "overview";
+  if (safeView === "overview") {
+    return "/overview";
+  }
+  if (resourceId && detailViews.has(safeView)) {
+    return `/${safeView}/${encodeURIComponent(resourceId)}`;
+  }
+  return `/${safeView}`;
+}
+
+function routeFromLocation() {
+  const pathname = window.location.pathname.replace(/\/$/, "") || "/";
+  if (pathname === "/") {
+    return { view: "overview", resourceId: null };
+  }
+  const segments = pathname.split("/").filter(Boolean);
+  const view = views.includes(segments[0]) ? segments[0] : "overview";
+  const resourceId =
+    segments[1] && detailViews.has(view) ? decodeURIComponent(segments[1]) : null;
+  return { view, resourceId };
+}
+
+function migrateHashRoute() {
+  const hash = window.location.hash.replace(/^#\/?/, "").trim();
+  if (!hash) {
+    return null;
+  }
+  const segments = hash.split("/").filter(Boolean);
+  const view = views.includes(segments[0]) ? segments[0] : "overview";
+  const resourceId =
+    segments[1] && detailViews.has(view) ? decodeURIComponent(segments[1]) : null;
+  return { view, resourceId };
 }
 
 function targetFor(server) {
@@ -734,7 +863,22 @@ function App() {
   const [serverModalOpen, setServerModalOpen] = useState(false);
   const [endpointModalOpen, setEndpointModalOpen] = useState(false);
   const [apiKeyModalOpen, setAPIKeyModalOpen] = useState(false);
-  const [activeView, setActiveView] = useState(viewFromHash);
+  const [curlModal, setCurlModal] = useState({ open: false, endpoint: null, apiKeys: [], exampleTool: null, loading: false });
+  const initialRoute = routeFromLocation();
+  const [activeView, setActiveView] = useState(initialRoute.view);
+  const [resourceId, setResourceId] = useState(initialRoute.resourceId);
+
+  function navigate(view, nextResourceId = null, { replace = false } = {}) {
+    const safeView = views.includes(view) ? view : "overview";
+    const safeResourceId =
+      nextResourceId && detailViews.has(safeView) ? String(nextResourceId) : null;
+    setActiveView(safeView);
+    setResourceId(safeResourceId);
+    const path = pathForRoute(safeView, safeResourceId);
+    if (window.location.pathname !== path) {
+      window.history[replace ? "replaceState" : "pushState"](null, "", path);
+    }
+  }
   const [theme, setTheme] = useState(initialTheme);
   const [preferences, setPreferences] = useState(initialPreferences);
   const [tableFilters, setTableFilters] = useState(emptyTableFilters);
@@ -803,7 +947,7 @@ function App() {
 
   function logout() {
     clearSession();
-    setActiveView("overview");
+    navigate("overview", null, { replace: true });
     notify(t("toast.loggedOut"), "", "warning");
   }
 
@@ -900,6 +1044,28 @@ function App() {
     }
   }
 
+  async function openCurlModal(endpoint) {
+    setCurlModal({ open: true, endpoint, apiKeys: [], exampleTool: null, loading: true });
+    try {
+      const payload = await request(`/api/endpoints/${encodeURIComponent(endpoint.id)}/curl`);
+      const apiKeys = payload.apiKeys || [];
+      const exampleTool = apiKeys.length ? await fetchExampleToolName(endpoint.id, apiKeys[0].value) : null;
+      setCurlModal({ open: true, endpoint, apiKeys, exampleTool, loading: false });
+    } catch (error) {
+      setCurlModal({ open: false, endpoint: null, apiKeys: [], exampleTool: null, loading: false });
+      notify(t("toast.curlOptionsLoadFailed"), error.message, "error");
+    }
+  }
+
+  async function copyEndpointCurl(command, apiKeyValue) {
+    try {
+      await writeClipboard(command);
+      notify(t("toast.curlCopied"), apiKeyValue);
+    } catch (error) {
+      notify(t("toast.copyFailed"), error.message, "error");
+    }
+  }
+
   async function loadTools(refresh = false, showToast = true) {
     const key = refresh ? "toolsRefresh" : "tools";
     if (inflightLoads.current[key]) return inflightLoads.current[key];
@@ -983,29 +1149,36 @@ function App() {
   }, [authUser, activeView, toolsLoaded, loadingTools]);
 
   useEffect(() => {
-    if (authUser && activeView === "audit-log" && !auditLogsLoaded && !loadingAuditLogs) {
+    if (authUser && activeView === "audit-log") {
       loadAuditLogs(false);
     }
-  }, [authUser, activeView, auditLogsLoaded, loadingAuditLogs]);
+  }, [authUser, activeView]);
 
   useEffect(() => {
-    function syncViewFromHash() {
-      setActiveView(viewFromHash());
+    const migrated = migrateHashRoute();
+    if (migrated) {
+      navigate(migrated.view, migrated.resourceId, { replace: true });
+      return;
     }
-
-    window.addEventListener("hashchange", syncViewFromHash);
-    return () => window.removeEventListener("hashchange", syncViewFromHash);
+    const path = pathForRoute(activeView, resourceId);
+    if (window.location.pathname !== path) {
+      window.history.replaceState(null, "", path);
+    }
   }, []);
 
   useEffect(() => {
-    const nextHash = `#${activeView}`;
-    if (window.location.hash !== nextHash) {
-      window.history.replaceState(null, "", nextHash);
+    function syncRouteFromHistory() {
+      const nextRoute = routeFromLocation();
+      setActiveView(nextRoute.view);
+      setResourceId(nextRoute.resourceId);
     }
-  }, [activeView]);
+
+    window.addEventListener("popstate", syncRouteFromHistory);
+    return () => window.removeEventListener("popstate", syncRouteFromHistory);
+  }, []);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
+    document.documentElement.classList.toggle("dark", theme === "dark");
     localStorage.setItem("mcp-gateway-theme", theme);
   }, [theme]);
 
@@ -1227,7 +1400,7 @@ function App() {
     setServerIdTouched(false);
     setEditingServer(false);
     setForm({ ...initialForm, presetId: transport === "stdio" ? customStdioPresetId : "custom-http", transport });
-    setActiveView("servers");
+    navigate("servers");
     setServerModalOpen(true);
   }
 
@@ -1235,7 +1408,7 @@ function App() {
     setEndpointIdTouched(false);
     setEditingEndpoint(false);
     setEndpointForm(initialEndpointForm);
-    setActiveView("endpoints");
+    navigate("endpoints");
     setEndpointModalOpen(true);
   }
 
@@ -1243,7 +1416,7 @@ function App() {
     setAPIKeyIdTouched(false);
     setEditingAPIKey(false);
     setAPIKeyForm(initialAPIKeyForm);
-    setActiveView("api-keys");
+    navigate("api-keys");
     setAPIKeyModalOpen(true);
   }
 
@@ -1357,9 +1530,13 @@ function App() {
       weight: server.weight || 1,
       enabled: Boolean(server.enabled),
     });
-    setActiveView("servers");
+    navigate("servers", server.id);
     setServerModalOpen(true);
     notify(t("toast.editingServer"), t("toast.editingLoaded", { name: server.name }), "warning");
+  }
+
+  function openServer(server) {
+    navigate("servers", server.id);
   }
 
   function editEndpoint(endpoint) {
@@ -1373,9 +1550,13 @@ function App() {
       rateLimitPerMinute: endpoint.rateLimit?.requestsPerMinute || 0,
       enabled: Boolean(endpoint.enabled),
     });
-    setActiveView("endpoints");
+    navigate("endpoints", endpoint.id);
     setEndpointModalOpen(true);
     notify(t("toast.editingEndpoint"), t("toast.editingLoaded", { name: endpoint.name }), "warning");
+  }
+
+  function openEndpoint(endpoint) {
+    navigate("endpoints", endpoint.id);
   }
 
   function editAPIKey(key) {
@@ -1389,7 +1570,7 @@ function App() {
       endpointIds: key.endpointIds || [],
       enabled: Boolean(key.enabled),
     });
-    setActiveView("api-keys");
+    navigate("api-keys");
     setAPIKeyModalOpen(true);
     notify(t("toast.editingAPIKey"), t("toast.editingLoaded", { name: key.name }), "warning");
   }
@@ -1441,6 +1622,7 @@ function App() {
   async function saveEndpoint(event) {
     event.preventDefault();
     setSavingEndpoint(true);
+    const isNew = !editingEndpoint;
     try {
       const payload = endpointPayloadFromForm(endpointForm);
       const response = await request("/api/endpoints", {
@@ -1451,8 +1633,16 @@ function App() {
       setEndpointIdTouched(false);
       setEditingEndpoint(false);
       setEndpointForm(initialEndpointForm);
-      notify(t("toast.endpointSaved"), t("toast.savedMessage", { name: payload.name }));
       setEndpointModalOpen(false);
+
+      const savedEndpoint = (response.endpoints || []).find((item) => item.id === payload.id);
+      if (isNew && savedEndpoint) {
+        await loadAPIKeys();
+        openCurlModal(savedEndpoint);
+        notify(t("toast.endpointSavedWithKey"), t("toast.endpointSavedWithKeyMessage", { name: payload.name }));
+      } else {
+        notify(t("toast.endpointSaved"), t("toast.savedMessage", { name: payload.name }));
+      }
     } catch (error) {
       notify(t("toast.saveEndpointFailed"), error.message, "error");
     } finally {
@@ -1524,6 +1714,9 @@ function App() {
       setServers(response.servers || []);
       setTools((items) => items.filter((tool) => tool.serverId !== id));
       setToolsLoaded(false);
+      if (resourceId === id) {
+        navigate("servers");
+      }
       notify(t("toast.serverDeleted"), id, "warning");
     } catch (error) {
       notify(t("toast.deleteFailed"), error.message, "error");
@@ -1545,6 +1738,9 @@ function App() {
     try {
       const response = await request(`/api/endpoints/${encodeURIComponent(id)}`, { method: "DELETE" });
       setEndpoints(response.endpoints || []);
+      if (resourceId === id) {
+        navigate("endpoints");
+      }
       notify(t("toast.endpointDeleted"), id, "warning");
     } catch (error) {
       notify(t("toast.deleteEndpointFailed"), error.message, "error");
@@ -1561,43 +1757,59 @@ function App() {
     }
   }
 
+  const selectedServer = useMemo(
+    () => (resourceId ? servers.find((server) => server.id === resourceId) : null),
+    [servers, resourceId],
+  );
+  const selectedEndpoint = useMemo(
+    () => (resourceId ? endpoints.find((endpoint) => endpoint.id === resourceId) : null),
+    [endpoints, resourceId],
+  );
   const runningServers = servers.filter((server) => server.status?.running).length;
   const enabledEndpoints = endpoints.filter((endpoint) => endpoint.enabled).length;
   const enabledAPIKeys = apiKeys.filter((key) => key.enabled).length;
   const failedAuditLogs = auditLogs.filter((entry) => entry.status >= 400).length;
   const limitedAuditLogs = auditLogs.filter((entry) => entry.status === 429).length;
   const viewTitle =
-    activeView === "servers"
-      ? t("view.servers.title")
-      : activeView === "endpoints"
-        ? t("view.endpoints.title")
-        : activeView === "api-keys"
-          ? t("view.apiKeys.title")
-          : activeView === "tools"
-            ? t("view.tools.title")
-            : activeView === "audit-log"
-              ? t("view.auditLog.title")
-              : activeView === "settings"
-                ? t("view.settings.title")
-                : activeView === "profile"
-                  ? t("view.profile.title")
-                : t("view.home.title");
+    activeView === "servers" && selectedServer
+      ? selectedServer.name
+      : activeView === "endpoints" && selectedEndpoint
+        ? selectedEndpoint.name
+        : activeView === "servers"
+          ? t("view.servers.title")
+          : activeView === "endpoints"
+            ? t("view.endpoints.title")
+            : activeView === "api-keys"
+              ? t("view.apiKeys.title")
+              : activeView === "tools"
+                ? t("view.tools.title")
+                : activeView === "audit-log"
+                  ? t("view.auditLog.title")
+                  : activeView === "settings"
+                    ? t("view.settings.title")
+                    : activeView === "profile"
+                      ? t("view.profile.title")
+                      : t("view.home.title");
   const viewDescription =
-    activeView === "servers"
-      ? t("view.servers.description")
-      : activeView === "endpoints"
-        ? t("view.endpoints.description")
-        : activeView === "api-keys"
-          ? t("view.apiKeys.description")
-          : activeView === "tools"
-            ? t("view.tools.description")
-            : activeView === "audit-log"
-              ? t("view.auditLog.description")
-              : activeView === "settings"
-                ? t("view.settings.description")
-                : activeView === "profile"
-                  ? t("view.profile.description")
-                : t("view.home.description");
+    activeView === "servers" && selectedServer
+      ? t("view.serverDetail.description")
+      : activeView === "endpoints" && selectedEndpoint
+        ? t("view.endpointDetail.description")
+        : activeView === "servers"
+          ? t("view.servers.description")
+          : activeView === "endpoints"
+            ? t("view.endpoints.description")
+            : activeView === "api-keys"
+              ? t("view.apiKeys.description")
+              : activeView === "tools"
+                ? t("view.tools.description")
+                : activeView === "audit-log"
+                  ? t("view.auditLog.description")
+                  : activeView === "settings"
+                    ? t("view.settings.description")
+                    : activeView === "profile"
+                      ? t("view.profile.description")
+                      : t("view.home.description");
 
   if (!authChecked) {
     return (
@@ -1622,100 +1834,146 @@ function App() {
     <>
       <ApiLoadingBar active={apiLoading} />
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
-      <div class={`app-shell ${preferences.denseTables ? "density-compact" : ""}`}>
+      <div class={cn("flex min-h-screen bg-background", preferences.denseTables && "density-compact")}>
         <Sidebar
           activeView={activeView}
           darkMode={darkMode}
           user={authUser}
           onLogout={logout}
-          onNavigate={setActiveView}
+          onNavigate={(view) => navigate(view)}
           onToggleTheme={() => setTheme(darkMode ? "mcp" : "dark")}
         />
-        <main class="workspace-main">
+        <main class="flex min-w-0 flex-1 flex-col">
+          <div class="flex-1 space-y-6 p-6">
           <TopBar title={viewTitle} description={viewDescription}>
-            {activeView === "servers" ? (
-              <button class="btn btn-primary btn-sm" onClick={openCreateServer}>{t("action.createServer")}</button>
+            {activeView === "servers" && resourceId ? (
+              <div class="flex flex-wrap gap-2">
+                <button class={cn(buttonVariants({ variant: "outline", size: "sm" }))} type="button" onClick={() => navigate("servers")}>
+                  {t("common.back")}
+                </button>
+                {selectedServer ? (
+                  <button class={cn(buttonVariants({ variant: "default", size: "sm" }))} type="button" onClick={() => editServer(selectedServer)}>
+                    {t("common.edit")}
+                  </button>
+                ) : null}
+              </div>
+            ) : activeView === "servers" ? (
+              <>
+                <button class={cn(buttonVariants({ variant: "outline", size: "sm" }))} onClick={() => loadServers(true)} disabled={loadingServers}>{loadingServers ? t("common.refreshing") : t("common.refresh")}</button>
+                <button class={cn(buttonVariants({ variant: "default", size: "sm" }))} onClick={openCreateServer}>{t("action.createServer")}</button>
+              </>
+            ) : activeView === "endpoints" && resourceId ? (
+              <div class="flex flex-wrap gap-2">
+                <button class={cn(buttonVariants({ variant: "outline", size: "sm" }))} type="button" onClick={() => navigate("endpoints")}>
+                  {t("common.back")}
+                </button>
+                {selectedEndpoint ? (
+                  <button class={cn(buttonVariants({ variant: "default", size: "sm" }))} type="button" onClick={() => editEndpoint(selectedEndpoint)}>
+                    {t("common.edit")}
+                  </button>
+                ) : null}
+              </div>
             ) : activeView === "endpoints" ? (
-              <button class="btn btn-primary btn-sm" onClick={openCreateEndpoint} disabled={!servers.length}>{t("action.createEndpoint")}</button>
+              <>
+                <button class={cn(buttonVariants({ variant: "outline", size: "sm" }))} onClick={() => loadEndpoints(true)} disabled={loadingEndpoints}>{loadingEndpoints ? t("common.refreshing") : t("common.refresh")}</button>
+                <button class={cn(buttonVariants({ variant: "default", size: "sm" }))} onClick={openCreateEndpoint} disabled={!servers.length}>{t("action.createEndpoint")}</button>
+              </>
             ) : activeView === "api-keys" ? (
-              <button class="btn btn-primary btn-sm" onClick={openCreateAPIKey} disabled={!endpoints.length}>{t("action.createAPIKey")}</button>
+              <>
+                <button class={cn(buttonVariants({ variant: "outline", size: "sm" }))} onClick={() => loadAPIKeys(true)} disabled={loadingAPIKeys}>{loadingAPIKeys ? t("common.refreshing") : t("common.refresh")}</button>
+                <button class={cn(buttonVariants({ variant: "default", size: "sm" }))} onClick={openCreateAPIKey} disabled={!endpoints.length}>{t("action.createAPIKey")}</button>
+              </>
             ) : activeView === "tools" ? (
-              <LoadingButton className="btn btn-primary btn-sm" loading={loadingTools} onClick={() => loadTools(true)}>
+              <LoadingButton className={cn(buttonVariants({ variant: "default", size: "sm" }))} loading={loadingTools} onClick={() => loadTools(true)}>
                 {t("action.refreshTools")}
               </LoadingButton>
             ) : activeView === "audit-log" ? (
-              <button class="btn btn-outline btn-sm" onClick={() => loadAuditLogs(true)} disabled={loadingAuditLogs}>{loadingAuditLogs ? t("common.refreshing") : t("common.refresh")}</button>
+              <button class={cn(buttonVariants({ variant: "outline", size: "sm" }))} onClick={() => loadAuditLogs(true)} disabled={loadingAuditLogs}>{loadingAuditLogs ? t("common.refreshing") : t("common.refresh")}</button>
             ) : activeView === "settings" ? (
-              <button class="btn btn-outline btn-sm" onClick={resetPreferences}>{t("action.resetPreferences")}</button>
+              <button class={cn(buttonVariants({ variant: "outline", size: "sm" }))} onClick={resetPreferences}>{t("action.resetPreferences")}</button>
             ) : activeView === "profile" ? null : (
-              <button class="btn btn-outline btn-sm" onClick={() => { loadServers(true); loadEndpoints(true); loadAPIKeys(true); }} disabled={loadingServers || loadingEndpoints || loadingAPIKeys}>{loadingServers || loadingEndpoints || loadingAPIKeys ? t("common.refreshing") : t("common.refresh")}</button>
+              <button class={cn(buttonVariants({ variant: "outline", size: "sm" }))} onClick={() => { loadServers(true); loadEndpoints(true); loadAPIKeys(true); }} disabled={loadingServers || loadingEndpoints || loadingAPIKeys}>{loadingServers || loadingEndpoints || loadingAPIKeys ? t("common.refreshing") : t("common.refresh")}</button>
             )}
           </TopBar>
           {activeView === "overview" ? (
             <div class="workspace-stack">
-              <section class="hero-grid workspace-panel overflow-hidden">
+              <Card className="hero-card shadow-sm">
+                <CardContent className="pt-6">
                 <div class="grid gap-6 lg:grid-cols-[1fr_22rem] lg:items-center">
-                  <div>
-                    <h1 class="text-4xl font-black tracking-tight text-slate-950 md:text-6xl">{t("brand.name")}</h1>
-                    <p class="mt-4 max-w-2xl text-base text-slate-600">
+                  <div class="space-y-2">
+                    <h1 class="text-3xl font-bold tracking-tight md:text-4xl">{t("brand.name")}</h1>
+                    <p class="max-w-2xl text-muted-foreground">
                       {t("overview.hero")}
                     </p>
                   </div>
                   <div class="grid gap-3">
-                    <InfoTile label={t("overview.endpointPattern")} value={endpointPattern} code />
-                    <InfoTile label={t("overview.sqliteDatabase")} value={configPath} />
+                    <InfoTile label={t("overview.endpointPattern")} value={endpointPattern} code copyable onCopy={() => notify(t("toast.copied"))} />
+                    <InfoTile label={t("overview.sqliteDatabase")} value={configPath} copyable onCopy={() => notify(t("toast.copied"))} />
                   </div>
                 </div>
-              </section>
+                </CardContent>
+              </Card>
 
               <GettingStartedFlow
                 endpointPattern={endpointPattern}
                 hasServers={servers.length > 0}
                 hasEndpoints={endpoints.length > 0}
+                hasAPIKeys={apiKeys.length > 0}
                 onCreateServer={openCreateServer}
                 onCreateEndpoint={openCreateEndpoint}
                 onCreateAPIKey={openCreateAPIKey}
-                onViewTools={() => setActiveView("tools")}
+                onViewTools={() => navigate("tools")}
+                onCopyEndpoint={() => notify(t("toast.copied"))}
               />
-
-              <section class="metric-grid">
-                <Stat title={t("overview.totalServers")} value={servers.length} />
-                <Stat title={t("common.endpoints")} value={endpoints.length} tone="text-secondary" />
-                <Stat title={t("common.apiKeys")} value={apiKeys.length} tone="text-primary" />
-                <Stat title={t("overview.loadedTools")} value={tools.length} tone="text-primary" />
-              </section>
 
               <section class="grid gap-4 xl:grid-cols-[1fr_24rem]">
                 <div class="workspace-panel">
                   <div class="section-title">{t("overview.gatewayOverview")}</div>
                   <div class="mt-4 grid gap-3 md:grid-cols-3">
-                    <OverviewCard label={t("common.servers")} value={servers.length} detail={t("overview.runningDetail", { count: runningServers })} />
-                    <OverviewCard label={t("common.endpoints")} value={endpoints.length} detail={t("overview.enabledEndpointDetail", { count: enabledEndpoints })} />
-                    <OverviewCard label={t("common.apiKeys")} value={apiKeys.length} detail={t("overview.enabledAPIKeyDetail", { count: enabledAPIKeys })} />
+                    <OverviewCard label={t("common.servers")} value={servers.length} detail={t("overview.runningDetail", { count: runningServers })} status={runningServers > 0 ? "success" : servers.length ? "warning" : "neutral"} />
+                    <OverviewCard label={t("common.endpoints")} value={endpoints.length} detail={t("overview.enabledEndpointDetail", { count: enabledEndpoints })} status={enabledEndpoints > 0 ? "success" : "neutral"} />
+                    <OverviewCard label={t("common.apiKeys")} value={apiKeys.length} detail={t("overview.enabledAPIKeyDetail", { count: enabledAPIKeys })} status={enabledAPIKeys > 0 ? "success" : "neutral"} />
                   </div>
                 </div>
-                <div class="workspace-panel">
-                  <div class="section-title">{t("overview.notifications")}</div>
-                  <div class="mt-4 rounded-xl bg-blue-50 p-4 text-sm text-blue-700">
-                    {t("overview.runningServersAvailable", { count: runningServers, unit: pluralKey(runningServers, "unit.server.one", "unit.server.other") })}
-                  </div>
-                </div>
+                <NotificationsPanel
+                  servers={servers}
+                  apiKeys={apiKeys}
+                  endpoints={endpoints}
+                  runningServers={runningServers}
+                  onCreateServer={openCreateServer}
+                  onRestart={restartServer}
+                  onEditAPIKey={editAPIKey}
+                />
               </section>
             </div>
           ) : null}
 
-          {activeView === "servers" ? (
+          {activeView === "servers" && resourceId ? (
+            selectedServer ? (
+              <ServerDetailPage
+                server={selectedServer}
+                testing={testingServerId === selectedServer.id}
+                onEdit={editServer}
+                onRestart={restartServer}
+                onTest={testSavedServer}
+                onToggleEnabled={toggleServerEnabled}
+                onDelete={deleteServer}
+              />
+            ) : (
+              <ResourceNotFound message={t("detail.serverNotFound")} onBack={() => navigate("servers")} />
+            )
+          ) : null}
+
+          {activeView === "servers" && !resourceId ? (
             <div class="workspace-stack">
               <section class="metric-grid">
                 <Stat title={t("overview.totalServers")} value={servers.length} />
-                <Stat title={t("metric.running")} value={runningServers} tone="text-success" />
+                <Stat title={t("metric.running")} value={runningServers} tone="text-emerald-600 dark:text-emerald-400" />
                 <Stat title={t("metric.disabled")} value={servers.filter((server) => !server.enabled).length} />
-                <Stat title={t("metric.gatewayTools")} value={gatewayToolsCount} tone="text-secondary" />
+                <Stat title={t("metric.gatewayTools")} value={gatewayToolsCount} tone="text-muted-foreground" />
               </section>
               <ListPanel
-                title={t("list.serversTitle")}
                 subtitle={t("list.serversSubtitle", { shown: filteredServers.length, total: servers.length })}
-                action={<button class="btn btn-outline btn-sm" onClick={() => loadServers(true)} disabled={loadingServers}>{loadingServers ? t("common.refreshing") : t("common.refresh")}</button>}
                 searchValue={serverSearch}
                 onSearch={(value) => {
                   setServerSearch(value);
@@ -1756,6 +2014,7 @@ function App() {
                         key={server.id}
                         server={server}
                         testing={testingServerId === server.id}
+                        onOpen={openServer}
                         onEdit={editServer}
                         onRestart={restartServer}
                         onTest={testSavedServer}
@@ -1765,25 +2024,38 @@ function App() {
                       />
                     ))
                   ) : (
-                    <EmptyState message={t("empty.noServers")} />
+                    <EmptyState message={t("empty.noServers")} actionLabel={t("action.createServer")} onAction={openCreateServer} />
                   )}
                 </div>
               </ListPanel>
             </div>
           ) : null}
 
-          {activeView === "endpoints" ? (
+          {activeView === "endpoints" && resourceId ? (
+            selectedEndpoint ? (
+              <EndpointDetailPage
+                endpoint={selectedEndpoint}
+                servers={servers}
+                onEdit={editEndpoint}
+                onCopyCurl={openCurlModal}
+                onToggleEnabled={toggleEndpointEnabled}
+                onDelete={deleteEndpoint}
+              />
+            ) : (
+              <ResourceNotFound message={t("detail.endpointNotFound")} onBack={() => navigate("endpoints")} />
+            )
+          ) : null}
+
+          {activeView === "endpoints" && !resourceId ? (
             <div class="workspace-stack">
               <section class="metric-grid">
                 <Stat title={t("metric.totalEndpoints")} value={endpoints.length} />
-                <Stat title={t("common.enabled")} value={enabledEndpoints} tone="text-success" />
-                <Stat title={t("metric.attachedServers")} value={new Set(endpoints.flatMap((endpoint) => endpoint.serverIds || [])).size} tone="text-primary" />
-                <Stat title={t("metric.limitedCalls")} value={endpoints.reduce((sum, endpoint) => sum + (endpoint.usage?.rateLimitedCalls || 0), 0)} tone="text-secondary" />
+                <Stat title={t("common.enabled")} value={enabledEndpoints} tone="text-emerald-600 dark:text-emerald-400" />
+                <Stat title={t("metric.attachedServers")} value={new Set(endpoints.flatMap((endpoint) => endpoint.serverIds || [])).size}  />
+                <Stat title={t("metric.limitedCalls")} value={endpoints.reduce((sum, endpoint) => sum + (endpoint.usage?.rateLimitedCalls || 0), 0)} tone="text-muted-foreground" />
               </section>
               <ListPanel
-                title={t("list.endpointsTitle")}
                 subtitle={t("list.endpointsSubtitle", { shown: filteredEndpoints.length, total: endpoints.length })}
-                action={<button class="btn btn-outline btn-sm" onClick={() => loadEndpoints(true)} disabled={loadingEndpoints}>{loadingEndpoints ? t("common.refreshing") : t("common.refresh")}</button>}
                 searchValue={endpointSearch}
                 onSearch={(value) => {
                   setEndpointSearch(value);
@@ -1824,14 +2096,21 @@ function App() {
                         key={endpoint.id}
                         endpoint={endpoint}
                         servers={servers}
+                        onOpen={openEndpoint}
                         onEdit={editEndpoint}
+                        onCopyCurl={openCurlModal}
                         onToggleEnabled={toggleEndpointEnabled}
                         onDelete={deleteEndpoint}
                         visibleColumns={endpointColumns}
+                        onCopyUrl={() => notify(t("toast.copied"))}
                       />
                     ))
                   ) : (
-                    <EmptyState message={servers.length ? t("empty.noEndpoints") : t("empty.needServerForEndpoint")} />
+                    <EmptyState
+                      message={servers.length ? t("empty.noEndpoints") : t("empty.needServerForEndpoint")}
+                      actionLabel={servers.length ? t("action.createEndpoint") : t("action.createServer")}
+                      onAction={servers.length ? openCreateEndpoint : openCreateServer}
+                    />
                   )}
                 </div>
               </ListPanel>
@@ -1842,14 +2121,12 @@ function App() {
             <div class="workspace-stack">
               <section class="metric-grid">
                 <Stat title={t("metric.totalAPIKeys")} value={apiKeys.length} />
-                <Stat title={t("common.enabled")} value={enabledAPIKeys} tone="text-success" />
-                <Stat title={t("metric.endpointResources")} value={new Set(apiKeys.flatMap((key) => key.endpointIds || [])).size} tone="text-primary" />
-                <Stat title={t("common.endpoints")} value={endpoints.length} tone="text-secondary" />
+                <Stat title={t("common.enabled")} value={enabledAPIKeys} tone="text-emerald-600 dark:text-emerald-400" />
+                <Stat title={t("metric.endpointResources")} value={new Set(apiKeys.flatMap((key) => key.endpointIds || [])).size}  />
+                <Stat title={t("common.endpoints")} value={endpoints.length} tone="text-muted-foreground" />
               </section>
               <ListPanel
-                title={t("list.apiKeysTitle")}
                 subtitle={t("list.apiKeysSubtitle", { shown: filteredAPIKeys.length, total: apiKeys.length })}
-                action={<button class="btn btn-outline btn-sm" onClick={() => loadAPIKeys(true)} disabled={loadingAPIKeys}>{loadingAPIKeys ? t("common.refreshing") : t("common.refresh")}</button>}
                 searchValue={apiKeySearch}
                 onSearch={(value) => {
                   setAPIKeySearch(value);
@@ -1896,7 +2173,11 @@ function App() {
                       />
                     ))
                   ) : (
-                    <EmptyState message={endpoints.length ? t("empty.noAPIKeys") : t("empty.needEndpointForAPIKey")} />
+                    <EmptyState
+                      message={endpoints.length ? t("empty.noAPIKeys") : t("empty.needEndpointForAPIKey")}
+                      actionLabel={endpoints.length ? t("action.createAPIKey") : t("action.createEndpoint")}
+                      onAction={endpoints.length ? openCreateAPIKey : openCreateEndpoint}
+                    />
                   )}
                 </div>
               </ListPanel>
@@ -1906,19 +2187,13 @@ function App() {
           {activeView === "tools" ? (
             <div class="workspace-stack">
               <section class="metric-grid">
-                <Stat title={t("overview.loadedTools")} value={tools.length} tone="text-primary" />
+                <Stat title={t("overview.loadedTools")} value={tools.length}  />
                 <Stat title={t("common.servers")} value={servers.length} />
-                <Stat title={t("metric.runningServers")} value={runningServers} tone="text-success" />
-                <Stat title={t("metric.gatewayTools")} value={gatewayToolsCount} tone="text-secondary" />
+                <Stat title={t("metric.runningServers")} value={runningServers} tone="text-emerald-600 dark:text-emerald-400" />
+                <Stat title={t("metric.gatewayTools")} value={gatewayToolsCount} tone="text-muted-foreground" />
               </section>
               <ListPanel
-                title={t("list.toolsTitle")}
                 subtitle={t("list.toolsSubtitle", { shown: filteredTools.length, total: tools.length })}
-                action={
-                  <LoadingButton className="btn btn-primary btn-sm" loading={loadingTools} onClick={() => loadTools(true)}>
-                    {t("action.refreshTools")}
-                  </LoadingButton>
-                }
                 searchValue={toolSearch}
                 onSearch={(value) => {
                   setToolSearch(value);
@@ -1956,7 +2231,7 @@ function App() {
                   ) : visibleTools.length ? (
                     visibleTools.map((tool) => <ToolCard key={tool.name} tool={tool} visibleColumns={toolColumns} />)
                   ) : (
-                    <EmptyState message={t("empty.noTools")} />
+                    <EmptyState message={t("empty.noTools")} actionLabel={t("action.refreshTools")} onAction={() => loadTools(true)} />
                   )}
                 </div>
               </ListPanel>
@@ -1966,15 +2241,13 @@ function App() {
           {activeView === "audit-log" ? (
             <div class="workspace-stack">
               <section class="metric-grid">
-                <Stat title={t("metric.auditEvents")} value={auditLogs.length} tone="text-primary" />
-                <Stat title={t("metric.failedEvents")} value={failedAuditLogs} tone={failedAuditLogs ? "text-error" : "text-success"} />
-                <Stat title={t("metric.limitedCalls")} value={limitedAuditLogs} tone="text-secondary" />
+                <Stat title={t("metric.auditEvents")} value={auditLogs.length}  />
+                <Stat title={t("metric.failedEvents")} value={failedAuditLogs} tone={failedAuditLogs ? "text-destructive" : "text-emerald-600 dark:text-emerald-400"} />
+                <Stat title={t("metric.limitedCalls")} value={limitedAuditLogs} tone="text-muted-foreground" />
                 <Stat title={t("metric.mcpEvents")} value={auditLogs.filter((entry) => entry.transport === "mcp").length} />
               </section>
               <ListPanel
-                title={t("list.auditLogsTitle")}
                 subtitle={t("list.auditLogsSubtitle", { shown: filteredAuditLogs.length, total: auditLogs.length })}
-                action={<button class="btn btn-outline btn-sm" onClick={() => loadAuditLogs(true)} disabled={loadingAuditLogs}>{loadingAuditLogs ? t("common.refreshing") : t("common.refresh")}</button>}
                 searchValue={auditLogSearch}
                 onSearch={(value) => {
                   setAuditLogSearch(value);
@@ -2020,71 +2293,60 @@ function App() {
 
           {activeView === "settings" ? (
             <div class="workspace-stack">
-              <section class="metric-grid">
-                <Stat title={t("metric.theme")} value={darkMode ? t("common.dark") : t("common.light")} tone="text-primary" />
-                <Stat title={t("metric.autoRefresh")} value={preferences.refreshInterval ? `${preferences.refreshInterval}s` : t("common.off")} />
-                <Stat title={t("metric.defaultTransport")} value={preferences.defaultTransport.toUpperCase()} tone="text-secondary" />
-                <Stat title={t("metric.configPath")} value={configPath === t("common.loadingInitial") ? t("common.loading") : t("common.ready")} tone="text-success" />
-              </section>
-
-              <section class="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
-                <div class="workspace-panel">
+              <section class="grid items-stretch gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+                <div class="workspace-panel flex h-full flex-col">
                   <div class="flex flex-col gap-1">
-                    <h2 class="text-lg font-bold text-slate-950">{t("settings.preferences")}</h2>
-                    <p class="text-sm text-slate-500">{t("settings.preferencesDescription")}</p>
+                    <h2 class="text-lg font-bold text-foreground">{t("settings.preferences")}</h2>
+                    <p class="text-sm text-muted-foreground">{t("settings.preferencesDescription")}</p>
                   </div>
 
-                  <div class="mt-5 grid gap-4 md:grid-cols-2">
+                  <div class="mt-5 grid flex-1 gap-4 md:grid-cols-2">
                     <Field label={t("settings.theme")}>
-                      <select class="select select-bordered w-full" value={theme} onChange={(event) => setTheme(event.currentTarget.value)}>
+                      <NativeSelect className={cn("w-full")} value={theme} onChange={(event) => setTheme(event.currentTarget.value)}>
                         <option value="mcp">{t("common.light")}</option>
                         <option value="dark">{t("common.dark")}</option>
-                      </select>
+                      </NativeSelect>
                     </Field>
                     <Field label={t("settings.refreshInterval")}>
-                      <select class="select select-bordered w-full" value={preferences.refreshInterval} onChange={(event) => updatePreference("refreshInterval", Number(event.currentTarget.value))}>
+                      <NativeSelect className={cn("w-full")} value={preferences.refreshInterval} onChange={(event) => updatePreference("refreshInterval", Number(event.currentTarget.value))}>
                         <option value="0">{t("common.off")}</option>
                         <option value="15">{t("settings.every15Seconds")}</option>
                         <option value="30">{t("settings.every30Seconds")}</option>
                         <option value="60">{t("settings.everyMinute")}</option>
                         <option value="300">{t("settings.every5Minutes")}</option>
-                      </select>
+                      </NativeSelect>
                     </Field>
                     <Field label={t("settings.defaultTransport")}>
-                      <select class="select select-bordered w-full" value={preferences.defaultTransport} onChange={(event) => updatePreference("defaultTransport", event.currentTarget.value)}>
+                      <NativeSelect className={cn("w-full")} value={preferences.defaultTransport} onChange={(event) => updatePreference("defaultTransport", event.currentTarget.value)}>
                         <option value="http">{t("settings.httpUrl")}</option>
                         <option value="stdio">{t("settings.localStdio")}</option>
-                      </select>
-                      <p class="mt-2 text-xs text-slate-500">{t("settings.defaultTransportHelp")}</p>
+                      </NativeSelect>
+                      <p class="mt-2 text-xs text-muted-foreground">{t("settings.defaultTransportHelp")}</p>
                     </Field>
-                    <div class="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <label class="label cursor-pointer justify-between gap-4">
+                    <div class="grid gap-3 rounded-2xl border border-border bg-muted/50 p-4">
+                      <div class="flex items-center justify-between gap-4">
                         <span>
-                          <span class="block font-bold text-slate-900">{t("settings.compactTables")}</span>
-                          <span class="text-xs text-slate-500">{t("settings.compactTablesHelp")}</span>
+                          <span class="block font-bold text-foreground">{t("settings.compactTables")}</span>
+                          <span class="text-xs text-muted-foreground">{t("settings.compactTablesHelp")}</span>
                         </span>
-                        <input class="toggle toggle-primary" type="checkbox" checked={preferences.denseTables} onChange={(event) => updatePreference("denseTables", event.currentTarget.checked)} />
-                      </label>
-                      <label class="label cursor-pointer justify-between gap-4">
+                        <Switch checked={preferences.denseTables} onCheckedChange={(checked) => updatePreference("denseTables", checked)} />
+                      </div>
+                      <div class="flex items-center justify-between gap-4">
                         <span>
-                          <span class="block font-bold text-slate-900">{t("settings.advancedTableControls")}</span>
-                          <span class="text-xs text-slate-500">{t("settings.advancedTableControlsHelp")}</span>
+                          <span class="block font-bold text-foreground">{t("settings.advancedTableControls")}</span>
+                          <span class="text-xs text-muted-foreground">{t("settings.advancedTableControlsHelp")}</span>
                         </span>
-                        <input class="toggle toggle-primary" type="checkbox" checked={preferences.showAdvancedControls} onChange={(event) => updatePreference("showAdvancedControls", event.currentTarget.checked)} />
-                      </label>
+                        <Switch checked={preferences.showAdvancedControls} onCheckedChange={(checked) => updatePreference("showAdvancedControls", checked)} />
+                      </div>
                     </div>
                   </div>
                 </div>
 
-                <div class="workspace-panel">
-                  <div class="section-title">{t("settings.gatewayPaths")}</div>
-                  <div class="mt-4 grid gap-3">
-                    <InfoTile label={t("overview.endpointPattern")} value={endpointPattern} code />
-                    <InfoTile label={t("overview.sqliteDatabase")} value={configPath} />
-                    <InfoTile label={t("settings.apiBase")} value={`${location.origin}/api`} code />
-                    <InfoTile label={t("settings.browserSettings")} value={preferencesStorageKey} code />
-                  </div>
-                </div>
+                <GatewayPathsPanel
+                  endpointPattern={endpointPattern}
+                  configPath={configPath}
+                  onCopy={() => notify(t("toast.copied"))}
+                />
               </section>
             </div>
           ) : null}
@@ -2098,6 +2360,7 @@ function App() {
               onUpdate={(name, value) => setPasswordForm((current) => ({ ...current, [name]: value }))}
             />
           ) : null}
+          </div>
       </main>
       </div>
       <ServerModal
@@ -2105,7 +2368,6 @@ function App() {
         title={editingServer ? t("modal.updateServer") : t("modal.createServer")}
         description={t("modal.serverDescription")}
         onClose={() => setServerModalOpen(false)}
-        closeOnBackdrop={false}
       >
         <ServerForm
           form={form}
@@ -2169,16 +2431,30 @@ function App() {
           onToggleEndpoint={toggleAPIKeyEndpoint}
         />
       </ServerModal>
+      <ServerModal
+        open={curlModal.open}
+        title={t("modal.copyCurl")}
+        description={t("curl.description")}
+        onClose={() => setCurlModal({ open: false, endpoint: null, apiKeys: [], exampleTool: null, loading: false })}
+      >
+        <CurlCopyModal
+          endpoint={curlModal.endpoint}
+          apiKeys={curlModal.apiKeys}
+          exampleTool={curlModal.exampleTool}
+          loading={curlModal.loading}
+          onCopy={copyEndpointCurl}
+        />
+      </ServerModal>
     </>
   );
 }
 
-function LoadingButton({ className, loading, onClick, type = "button", children }) {
+function LoadingButton({ className, loading, onClick, type = "button", children, variant = "default", size = "default" }) {
   return (
-    <button class={className} type={type} onClick={onClick} disabled={loading}>
-      {loading ? <span class="loading loading-spinner loading-sm"></span> : null}
+    <Button className={className} variant={variant} size={size} type={type} onClick={onClick} disabled={loading}>
+      {loading ? <Spinner size="sm" /> : null}
       {loading ? t("common.loading") : children}
-    </button>
+    </Button>
   );
 }
 
@@ -2188,7 +2464,7 @@ function ApiLoadingBar({ active }) {
   return (
     <div class="api-loading-overlay" role="status" aria-live="polite" aria-label={t("aria.apiRequestInProgress")}>
       <div class="api-loading-card">
-        <span class="loading loading-spinner loading-lg text-primary"></span>
+        <Spinner size="lg" />
         <span>{t("common.loading")}</span>
       </div>
     </div>
@@ -2201,32 +2477,36 @@ function BrandLogo() {
 
 function LoginPage({ form, loading, onSubmit, onUpdate }) {
   return (
-    <main class="login-shell">
-      <section class="login-card">
-        <div class="brand-row">
-          <BrandLogo />
-          <div>
-            <div class="text-sm font-bold text-slate-900">{t("brand.name")}</div>
-            <div class="text-xs text-slate-500">{t("auth.platformLogin")}</div>
+    <main class="flex min-h-screen items-center justify-center bg-muted/40 p-4">
+      <Card className="w-full max-w-md">
+        <CardHeader className="space-y-4">
+          <div class="flex items-center gap-3">
+            <BrandLogo />
+            <div>
+              <CardTitle className="text-base">{t("brand.name")}</CardTitle>
+              <CardDescription>{t("auth.platformLogin")}</CardDescription>
+            </div>
           </div>
-        </div>
-        <div>
-          <h1 class="mt-6 text-3xl font-black text-slate-950">{t("auth.signInTitle")}</h1>
-          <p class="mt-2 text-sm text-slate-500">{t("auth.signInDescription")}</p>
-        </div>
-        <form class="mt-6 grid gap-4" onSubmit={onSubmit}>
-          <Field label={t("auth.email")}>
-            <input class="input input-bordered w-full" type="email" autocomplete="username" value={form.email} onInput={(event) => onUpdate("email", event.currentTarget.value)} required />
-          </Field>
-          <Field label={t("auth.password")}>
-            <input class="input input-bordered w-full" type="password" autocomplete="current-password" value={form.password} onInput={(event) => onUpdate("password", event.currentTarget.value)} required />
-          </Field>
-          <LoadingButton className="btn btn-primary w-full" type="submit" loading={loading}>
-            {t("auth.signIn")}
-          </LoadingButton>
-        </form>
-        <p class="mt-4 rounded-xl bg-slate-50 p-3 text-xs text-slate-500">{t("auth.defaultCredentialHint")}</p>
-      </section>
+          <div class="space-y-1">
+            <CardTitle className="text-2xl">{t("auth.signInTitle")}</CardTitle>
+            <CardDescription>{t("auth.signInDescription")}</CardDescription>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <form class="grid gap-4" onSubmit={onSubmit}>
+            <Field label={t("auth.email")}>
+              <Input className={cn("w-full")} type="email" autocomplete="username" value={form.email} onInput={(event) => onUpdate("email", event.currentTarget.value)} required />
+            </Field>
+            <Field label={t("auth.password")}>
+              <Input className={cn("w-full")} type="password" autocomplete="current-password" value={form.password} onInput={(event) => onUpdate("password", event.currentTarget.value)} required />
+            </Field>
+            <LoadingButton className={cn("w-full")} type="submit" loading={loading}>
+              {t("auth.signIn")}
+            </LoadingButton>
+          </form>
+          <p class="mt-4 rounded-lg border border-border bg-muted/50 p-3 text-xs text-muted-foreground">{t("auth.defaultCredentialHint")}</p>
+        </CardContent>
+      </Card>
     </main>
   );
 }
@@ -2236,26 +2516,26 @@ function ProfileView({ form, saving, user, onSubmit, onUpdate }) {
     <div class="workspace-stack">
       <section class="workspace-panel">
         <div class="flex flex-col gap-1">
-          <h2 class="text-lg font-bold text-slate-950">{t("profile.account")}</h2>
-          <p class="text-sm text-slate-500">{user?.email}</p>
+          <h2 class="text-lg font-bold text-foreground">{t("profile.account")}</h2>
+          <p class="text-sm text-muted-foreground">{user?.email}</p>
         </div>
       </section>
       <section class="workspace-panel max-w-2xl">
         <div class="flex flex-col gap-1">
-          <h2 class="text-lg font-bold text-slate-950">{t("profile.changePassword")}</h2>
-          <p class="text-sm text-slate-500">{t("profile.changePasswordDescription")}</p>
+          <h2 class="text-lg font-bold text-foreground">{t("profile.changePassword")}</h2>
+          <p class="text-sm text-muted-foreground">{t("profile.changePasswordDescription")}</p>
         </div>
         <form class="mt-5 grid gap-4" onSubmit={onSubmit}>
           <Field label={t("profile.currentPassword")}>
-            <input class="input input-bordered w-full" type="password" autocomplete="current-password" value={form.currentPassword} onInput={(event) => onUpdate("currentPassword", event.currentTarget.value)} required />
+            <Input className={cn("w-full")} type="password" autocomplete="current-password" value={form.currentPassword} onInput={(event) => onUpdate("currentPassword", event.currentTarget.value)} required />
           </Field>
           <Field label={t("profile.newPassword")}>
-            <input class="input input-bordered w-full" type="password" autocomplete="new-password" value={form.newPassword} onInput={(event) => onUpdate("newPassword", event.currentTarget.value)} required />
+            <Input className={cn("w-full")} type="password" autocomplete="new-password" value={form.newPassword} onInput={(event) => onUpdate("newPassword", event.currentTarget.value)} required />
           </Field>
           <Field label={t("profile.confirmPassword")}>
-            <input class="input input-bordered w-full" type="password" autocomplete="new-password" value={form.confirmPassword} onInput={(event) => onUpdate("confirmPassword", event.currentTarget.value)} required />
+            <Input className={cn("w-full")} type="password" autocomplete="new-password" value={form.confirmPassword} onInput={(event) => onUpdate("confirmPassword", event.currentTarget.value)} required />
           </Field>
-          <LoadingButton className="btn btn-primary justify-self-start" type="submit" loading={saving}>
+          <LoadingButton className={cn(buttonVariants({ variant: "default" }), "justify-self-start")} type="submit" loading={saving}>
             {t("profile.savePassword")}
           </LoadingButton>
         </form>
@@ -2266,57 +2546,72 @@ function ProfileView({ form, saving, user, onSubmit, onUpdate }) {
 
 function Sidebar({ activeView, darkMode, user, onLogout, onNavigate, onToggleTheme }) {
   const links = [
-    { id: "overview", label: t("nav.overview") },
-    { id: "servers", label: t("nav.mcpServers") },
-    { id: "endpoints", label: t("nav.endpoints") },
-    { id: "api-keys", label: t("nav.apiKeys") },
-    { id: "tools", label: t("nav.tools") },
-    { id: "audit-log", label: t("nav.auditLog") },
-    { id: "settings", label: t("nav.settings") },
+    { id: "overview", label: t("nav.overview"), icon: LayoutDashboard },
+    { id: "servers", label: t("nav.mcpServers"), icon: Server },
+    { id: "endpoints", label: t("nav.endpoints"), icon: Link2 },
+    { id: "api-keys", label: t("nav.apiKeys"), icon: Key },
+    { id: "tools", label: t("nav.tools"), icon: Wrench },
+    { id: "audit-log", label: t("nav.auditLog"), icon: ScrollText },
+    { id: "settings", label: t("nav.settings"), icon: Settings2 },
   ];
 
   return (
-    <>
-      <aside class="module-sidebar">
-        <div class="brand-row mb-5">
-          <BrandLogo />
-          <div>
-            <div class="text-sm font-bold text-slate-900">{t("brand.name")}</div>
-            <div class="text-xs text-slate-500">{t("nav.project")}</div>
-          </div>
+    <aside class="flex w-full shrink-0 flex-col border-b border-border bg-card lg:sticky lg:top-0 lg:h-screen lg:w-56 lg:border-b-0 lg:border-r">
+      <div class="flex items-center gap-3 border-b border-border p-4">
+        <BrandLogo />
+        <div class="min-w-0">
+          <div class="truncate text-sm font-semibold">{t("brand.name")}</div>
+          <div class="truncate text-xs text-muted-foreground">{t("nav.project")}</div>
         </div>
-        <nav class="module-group grid gap-1">
-          {links.map((link) => (
-            <button
+      </div>
+      <nav class="flex flex-1 flex-col gap-0.5 p-2">
+        {links.map((link) => {
+          const Icon = link.icon;
+          const active = activeView === link.id;
+          return (
+            <Button
               key={link.id}
-              class={`sidebar-link ${activeView === link.id ? "sidebar-link-active" : ""}`}
+              variant="ghost"
+              className={cn(
+                "h-9 w-full justify-start gap-2.5 rounded-md pl-3 font-medium",
+                active && "nav-link-active",
+              )}
               type="button"
               onClick={() => onNavigate(link.id)}
             >
-              <span>{link.label}</span>
-            </button>
-          ))}
-        </nav>
-        <div class="sidebar-resource-links">
-          <a href="/docs" target="_blank" rel="noreferrer">{t("nav.apiDocs")}</a>
-          <a href="https://github.com/mcpHQ/mcp-gateway" target="_blank" rel="noreferrer">{t("nav.github")}</a>
-        </div>
-        <div class="sidebar-user-menu">
-          <button class="sidebar-avatar-button" type="button">
-            <span class="sidebar-avatar">{initialsForEmail(user?.email)}</span>
-            <span class="min-w-0">
-              <span class="block truncate text-sm font-bold text-slate-900">{user?.email}</span>
-              <span class="block text-xs text-slate-500">{t("auth.signedIn")}</span>
-            </span>
-          </button>
-          <div class="sidebar-avatar-menu">
-            <button type="button" onClick={() => onNavigate("profile")}>{t("auth.profile")}</button>
-            <button type="button" onClick={onToggleTheme}>{darkMode ? t("auth.lightMode") : t("auth.darkMode")}</button>
-            <button type="button" onClick={onLogout}>{t("auth.logout")}</button>
-          </div>
-        </div>
-      </aside>
-    </>
+              <Icon className="h-4 w-4 shrink-0 opacity-70" />
+              {link.label}
+            </Button>
+          );
+        })}
+      </nav>
+      <div class="flex flex-col gap-0.5 border-t border-border p-2">
+        <Button variant="ghost" className="h-8 w-full justify-start gap-2.5 px-3 text-sm font-normal" asChild>
+          <a href="/docs" target="_blank" rel="noreferrer"><BookOpen className="h-3.5 w-3.5 opacity-70" />{t("nav.apiDocs")}</a>
+        </Button>
+        <Button variant="ghost" className="h-8 w-full justify-start gap-2.5 px-3 text-sm font-normal" asChild>
+          <a href="https://github.com/mcpHQ/mcp-gateway" target="_blank" rel="noreferrer"><ExternalLink className="h-3.5 w-3.5 opacity-70" />{t("nav.github")}</a>
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" className="mt-2 h-auto w-full justify-start gap-3 px-3 py-2">
+              <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+                {initialsForEmail(user?.email)}
+              </span>
+              <span class="min-w-0 text-left">
+                <span class="block truncate text-sm font-medium">{user?.email}</span>
+                <span class="block text-xs text-muted-foreground">{t("auth.signedIn")}</span>
+              </span>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-56">
+            <DropdownMenuItem onClick={() => onNavigate("profile")}>{t("auth.profile")}</DropdownMenuItem>
+            <DropdownMenuItem onClick={onToggleTheme}>{darkMode ? t("auth.lightMode") : t("auth.darkMode")}</DropdownMenuItem>
+            <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={onLogout}>{t("auth.logout")}</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </aside>
   );
 }
 
@@ -2326,14 +2621,12 @@ function initialsForEmail(email = "") {
 
 function TopBar({ title, description, children }) {
   return (
-    <header class="topbar">
-      <div>
-        <h1 class="text-lg font-bold text-slate-950">{title}</h1>
-        <p class="text-sm text-slate-500">{description}</p>
+    <header class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+      <div class="space-y-1">
+        <h1 class="text-2xl font-semibold tracking-tight">{title}</h1>
+        {description ? <p class="text-sm text-muted-foreground">{description}</p> : null}
       </div>
-      <div class="flex items-center gap-2">
-        {children}
-      </div>
+      <div class="flex flex-wrap items-center gap-2">{children}</div>
     </header>
   );
 }
@@ -2347,22 +2640,89 @@ function ThemeToggle({ darkMode, onToggle }) {
   );
 }
 
-function ServerModal({ open, title, description, onClose, closeOnBackdrop = true, children }) {
-  if (!open) return null;
-
+function ServerModal({ open, title, description, onClose, children }) {
   return (
-    <div class="modal modal-open">
-      <div class="modal-box max-h-[92vh] w-11/12 max-w-6xl bg-base-100 p-0">
-        <div class="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-200 bg-base-100/95 px-6 py-5 backdrop-blur">
-          <div>
-            <h2 class="text-2xl font-black">{title}</h2>
-            <p class="mt-1 text-sm text-slate-500">{description}</p>
-          </div>
-          <button class="btn btn-circle btn-ghost" type="button" onClick={onClose} aria-label={t("modal.closeServer")}>{t("common.closeIcon")}</button>
+    <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
+      <DialogContent className="max-w-6xl gap-0 overflow-hidden p-0" onInteractOutside={(event) => event.preventDefault()}>
+        <div class="sticky top-0 z-10 flex items-start justify-between gap-4 border-b bg-background/95 px-6 py-5 backdrop-blur">
+          <DialogHeader className="text-left">
+            <DialogTitle>{title}</DialogTitle>
+            <DialogDescription>{description}</DialogDescription>
+          </DialogHeader>
+          <Button variant="ghost" size="icon" type="button" onClick={onClose} aria-label={t("modal.closeServer")}>
+            <X className="h-4 w-4" />
+          </Button>
         </div>
         {children}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function CurlCopyModal({ endpoint, apiKeys, exampleTool, loading, onCopy }) {
+  if (!endpoint) return null;
+
+  return (
+    <div class="grid gap-4 p-6">
+      <div class="rounded-2xl border border-border bg-muted/50 p-4">
+        <div class="text-xs font-bold uppercase tracking-wide text-muted-foreground">{t("table.mcpUrl")}</div>
+        <code class="mt-2 block break-all text-sm text-primary">{endpointUrl(endpoint)}</code>
       </div>
-      <button class="modal-backdrop" type="button" onClick={closeOnBackdrop ? onClose : undefined}>{t("common.close")}</button>
+      {loading ? (
+        <div class="flex items-center gap-3 rounded-2xl border border-border p-4 text-sm text-muted-foreground">
+          <Spinner size="sm" />
+          {t("common.loading")}
+        </div>
+      ) : apiKeys.length ? (
+        <div class="grid gap-3">
+          {apiKeys.map((apiKey) => {
+            const listCommand = curlForEndpoint(endpoint, apiKey);
+            const callCommand = exampleTool ? restToolCallCurlForEndpoint(endpoint, apiKey, exampleTool) : null;
+            return (
+              <div key={apiKey.id} class="rounded-2xl border border-border bg-card p-4">
+                <div class="min-w-0">
+                  <div class="font-bold text-foreground">{apiKey.name}</div>
+                  <div class="mt-1 font-mono text-xs text-muted-foreground">{apiKey.id}</div>
+                  <div class="mt-3">
+                    <div class="text-xs font-bold uppercase tracking-wide text-muted-foreground">{t("apiKey.value")}</div>
+                    <code class="mt-1 block break-all rounded-lg bg-primary/10 px-2 py-1 text-xs text-primary">{apiKey.value}</code>
+                  </div>
+                </div>
+                <div class="mt-4 grid gap-4">
+                  <div>
+                    <div class="mb-2 flex items-center justify-between gap-3">
+                      <div>
+                        <div class="text-sm font-bold text-foreground">{t("curl.listTools")}</div>
+                        <p class="text-xs text-muted-foreground">{t("curl.listToolsHelp")}</p>
+                      </div>
+                      <button class={cn(buttonVariants({ variant: "outline", size: "sm" }), "shrink-0")} type="button" onClick={() => onCopy(listCommand, apiKey.value)}>
+                        {t("action.copyCurl")}
+                      </button>
+                    </div>
+                    <Textarea className={cn("h-28 w-full font-mono text-xs")} readOnly value={listCommand}></Textarea>
+                  </div>
+                  {callCommand ? (
+                    <div>
+                      <div class="mb-2 flex items-center justify-between gap-3">
+                        <div>
+                          <div class="text-sm font-bold text-foreground">{t("curl.callTool")}</div>
+                          <p class="text-xs text-muted-foreground">{t("curl.callToolHelp", { tool: exampleTool })}</p>
+                        </div>
+                        <button class={cn(buttonVariants({ variant: "default", size: "sm" }), "shrink-0")} type="button" onClick={() => onCopy(callCommand, apiKey.value)}>
+                          {t("action.copyCurl")}
+                        </button>
+                      </div>
+                      <Textarea className={cn("h-36 w-full font-mono text-xs")} readOnly value={callCommand}></Textarea>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <EmptyState message={t("empty.noEndpointAPIKeys")} />
+      )}
     </div>
   );
 }
@@ -2372,19 +2732,19 @@ function ArgList({ args, onChange, onAdd, onRemove }) {
   return (
     <div class="grid gap-2">
       {rows.map((arg, index) => (
-        <div class="join w-full" key={index}>
-          <input
-            class="input input-bordered join-item w-full"
+        <div class="flex w-full gap-0" key={index}>
+          <Input
+            className={cn("rounded-r-none w-full")}
             value={arg}
             placeholder={index === 0 ? t("server.placeholderArg") : ""}
             onInput={(event) => onChange(index, event.currentTarget.value)}
           />
-          <button class="btn btn-outline join-item" type="button" onClick={() => onRemove(index)} disabled={!args.length}>
+          <button class={cn(buttonVariants({ variant: "outline" }), "rounded-l-none")} type="button" onClick={() => onRemove(index)} disabled={!args.length}>
             {t("common.remove")}
           </button>
         </div>
       ))}
-      <button class="btn btn-outline btn-sm justify-self-start" type="button" onClick={onAdd}>
+      <button class={cn(buttonVariants({ variant: "outline", size: "sm" }), "justify-self-start")} type="button" onClick={onAdd}>
         {t("server.addArg")}
       </button>
     </div>
@@ -2398,16 +2758,16 @@ function ServerForm({ form, saving, testing, onSubmit, onTest, onClear, onPreset
       <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <h3 class="text-lg font-black">{t("server.details")}</h3>
-          <p class="text-sm text-slate-500">{t("server.detailsHelp")}</p>
+          <p class="text-sm text-muted-foreground">{t("server.detailsHelp")}</p>
         </div>
-        <button class="btn btn-ghost" type="button" onClick={onClear}>
+        <button class={cn(buttonVariants({ variant: "ghost" }))} type="button" onClick={onClear}>
           {t("common.clearForm")}
         </button>
       </div>
 
       <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Field label={t("server.preset")} wide>
-          <select class="select select-bordered w-full" value={form.presetId} onChange={(event) => onPreset(event.currentTarget.value)}>
+          <NativeSelect className={cn("w-full")} value={form.presetId} onChange={(event) => onPreset(event.currentTarget.value)}>
             {showSyntheticPresetOption ? (
               <option value={form.presetId}>{presetLabelForForm(form)}</option>
             ) : null}
@@ -2416,29 +2776,29 @@ function ServerForm({ form, saving, testing, onSubmit, onTest, onClear, onPreset
                 {presetLabel(preset)}
               </option>
             ))}
-          </select>
+          </NativeSelect>
           <div class="mt-3 rounded-2xl border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
             <div class="font-bold">{presetLabelForForm(form)}</div>
             <p class="mt-1 text-xs leading-relaxed text-blue-700">{presetDescriptionForForm(form)}</p>
           </div>
         </Field>
         <Field label={t("server.transport")}>
-          <select class="select select-bordered w-full" value={form.transport} onChange={(event) => onUpdate("transport", event.currentTarget.value)}>
+          <NativeSelect className={cn("w-full")} value={form.transport} onChange={(event) => onUpdate("transport", event.currentTarget.value)}>
             <option value="http">{t("settings.httpUrl")}</option>
             <option value="stdio">{t("settings.localStdio")}</option>
-          </select>
+          </NativeSelect>
         </Field>
         <Field label={t("server.weight")}>
-          <input class="input input-bordered w-full" min="1" type="number" value={form.weight} onInput={(event) => onUpdate("weight", event.currentTarget.value)} />
+          <Input className={cn("w-full")} min="1" type="number" value={form.weight} onInput={(event) => onUpdate("weight", event.currentTarget.value)} />
         </Field>
         <Field label={t("common.name")}>
-          <input class="input input-bordered w-full" required value={form.name} placeholder={t("server.placeholderName")} onInput={(event) => onUpdate("name", event.currentTarget.value)} />
+          <Input className={cn("w-full")} required value={form.name} placeholder={t("server.placeholderName")} onInput={(event) => onUpdate("name", event.currentTarget.value)} />
         </Field>
         {form.transport === "http" ? (
           <>
             <Field label={t("server.mcpServerUrl")} wide>
-              <input class="input input-bordered w-full" required value={form.url} placeholder={t("server.placeholderUrl")} onInput={(event) => onUpdate("url", event.currentTarget.value)} />
-              <p class="mt-2 text-xs text-slate-500">{t("server.urlHelp")}</p>
+              <Input className={cn("w-full")} required value={form.url} placeholder={t("server.placeholderUrl")} onInput={(event) => onUpdate("url", event.currentTarget.value)} />
+              <p class="mt-2 text-xs text-muted-foreground">{t("server.urlHelp")}</p>
             </Field>
             <div class="xl:col-span-4">
               <AuthAndHeaders
@@ -2466,33 +2826,33 @@ function ServerForm({ form, saving, testing, onSubmit, onTest, onClear, onPreset
         ) : (
           <>
             <Field label={t("server.command")} wide>
-              <input class="input input-bordered w-full" required value={form.command} placeholder={t("server.placeholderCommand")} onInput={(event) => onUpdate("command", event.currentTarget.value)} />
+              <Input className={cn("w-full")} required value={form.command} placeholder={t("server.placeholderCommand")} onInput={(event) => onUpdate("command", event.currentTarget.value)} />
             </Field>
             <Field label={t("server.args")} wide>
               <ArgList args={form.args} onChange={onArgChange} onAdd={onAddArg} onRemove={onRemoveArg} />
-              <p class="mt-2 text-xs text-slate-500">{t("server.argsHelp")}</p>
+              <p class="mt-2 text-xs text-muted-foreground">{t("server.argsHelp")}</p>
             </Field>
-            <div class="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600 md:col-span-2 xl:col-span-4">
-              <span class="font-bold text-slate-900">{t("auth.title")}:</span> {t("server.stdioAuthHelp")}
+            <div class="rounded-2xl border border-border bg-muted/50 p-3 text-sm text-muted-foreground md:col-span-2 xl:col-span-4">
+              <span class="font-bold text-foreground">{t("auth.title")}:</span> {t("server.stdioAuthHelp")}
             </div>
           </>
         )}
       </div>
 
-      <div class="flex flex-col gap-3 border-t border-slate-200 pt-5 sm:flex-row sm:items-center sm:justify-between">
-        <label class="label cursor-pointer justify-start gap-3">
-          <input class="checkbox checkbox-primary" type="checkbox" checked={form.enabled} onChange={(event) => onUpdate("enabled", event.currentTarget.checked)} />
-          <span class="label-text font-semibold">{t("common.enabled")}</span>
+      <div class="flex flex-col gap-3 border-t border-border pt-5 sm:flex-row sm:items-center sm:justify-between">
+        <label class="flex cursor-pointer items-center gap-3">
+          <Checkbox checked={form.enabled} onCheckedChange={(checked) => onUpdate("enabled", checked)} />
+          <span class="font-semibold">{t("common.enabled")}</span>
         </label>
         <div class="flex flex-col gap-2 sm:flex-row">
-          <button class={`btn btn-outline min-w-40 ${testing ? "btn-disabled" : ""}`} type="button" disabled={testing || saving} onClick={onTest}>
-            {testing ? <span class="loading loading-spinner loading-sm"></span> : null}
+          <Button className="min-w-40" variant="outline" type="button" disabled={testing || saving} onClick={onTest}>
+            {testing ? <Spinner size="sm" /> : null}
             {testing ? t("common.testing") : t("action.testConnection")}
-          </button>
-          <button class={`btn btn-primary min-w-40 ${saving ? "btn-disabled" : ""}`} type="submit" disabled={saving || testing}>
-            {saving ? <span class="loading loading-spinner loading-sm"></span> : null}
+          </Button>
+          <Button className="min-w-40" type="submit" disabled={saving || testing}>
+            {saving ? <Spinner size="sm" /> : null}
             {saving ? t("common.saving") : t("action.saveServer")}
-          </button>
+          </Button>
         </div>
       </div>
     </form>
@@ -2505,44 +2865,43 @@ function EndpointForm({ form, servers, saving, onSubmit, onClear, onUpdate, onTo
       <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <h3 class="text-lg font-black">{t("endpoint.details")}</h3>
-          <p class="text-sm text-slate-500">{t("endpoint.detailsHelp")}</p>
+          <p class="text-sm text-muted-foreground">{t("endpoint.detailsHelp")}</p>
         </div>
-        <button class="btn btn-ghost" type="button" onClick={onClear}>
+        <button class={cn(buttonVariants({ variant: "ghost" }))} type="button" onClick={onClear}>
           {t("common.clearForm")}
         </button>
       </div>
 
       <div class="grid gap-4 md:grid-cols-2">
         <Field label={t("common.name")}>
-          <input class="input input-bordered w-full" required value={form.name} placeholder={t("endpoint.placeholderName")} onInput={(event) => onUpdate("name", event.currentTarget.value)} />
+          <Input className={cn("w-full")} required value={form.name} placeholder={t("endpoint.placeholderName")} onInput={(event) => onUpdate("name", event.currentTarget.value)} />
         </Field>
         <Field label={t("endpoint.rateLimitPerMin")}>
-          <input class="input input-bordered w-full" min="0" type="number" value={form.rateLimitPerMinute} onInput={(event) => onUpdate("rateLimitPerMinute", event.currentTarget.value)} />
-          <p class="mt-2 text-xs text-slate-500">{t("endpoint.rateLimitHelp")}</p>
+          <Input className={cn("w-full")} min="0" type="number" value={form.rateLimitPerMinute} onInput={(event) => onUpdate("rateLimitPerMinute", event.currentTarget.value)} />
+          <p class="mt-2 text-xs text-muted-foreground">{t("endpoint.rateLimitHelp")}</p>
         </Field>
         <Field label={t("common.description")}>
-          <input class="input input-bordered w-full" value={form.description} placeholder={t("endpoint.placeholderDescription")} onInput={(event) => onUpdate("description", event.currentTarget.value)} />
+          <Input className={cn("w-full")} value={form.description} placeholder={t("endpoint.placeholderDescription")} onInput={(event) => onUpdate("description", event.currentTarget.value)} />
         </Field>
       </div>
 
-      <div class="rounded-3xl border border-slate-200 bg-base-100 p-4">
+      <div class="rounded-3xl border border-border bg-card p-4">
         <div class="mb-4 flex flex-col gap-1">
           <h3 class="font-black">{t("endpoint.mcpServers")}</h3>
-          <p class="text-sm text-slate-500">{t("endpoint.mcpServersHelp")}</p>
+          <p class="text-sm text-muted-foreground">{t("endpoint.mcpServersHelp")}</p>
         </div>
         {servers.length ? (
           <div class="grid gap-2 md:grid-cols-2">
             {servers.map((server) => (
-              <label key={server.id} class="flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-3">
-                <input
-                  class="checkbox checkbox-primary mt-1"
-                  type="checkbox"
+              <label key={server.id} class="flex cursor-pointer items-start gap-3 rounded-2xl border border-border bg-muted/50 p-3">
+                <Checkbox
+                  className="mt-1"
                   checked={form.serverIds.includes(server.id)}
-                  onChange={(event) => onToggleServer(server.id, event.currentTarget.checked)}
+                  onCheckedChange={(checked) => onToggleServer(server.id, checked)}
                 />
                 <span class="min-w-0">
-                  <span class="block truncate font-bold text-slate-900">{server.name}</span>
-                  <span class="block truncate text-xs text-slate-500">{server.transport || "stdio"} - {server.enabled ? t("common.enabled") : t("common.disabled")}</span>
+                  <span class="block truncate font-bold text-foreground">{server.name}</span>
+                  <span class="block truncate text-xs text-muted-foreground">{server.transport || "stdio"} - {server.enabled ? t("common.enabled") : t("common.disabled")}</span>
                 </span>
               </label>
             ))}
@@ -2552,15 +2911,15 @@ function EndpointForm({ form, servers, saving, onSubmit, onClear, onUpdate, onTo
         )}
       </div>
 
-      <div class="flex flex-col gap-3 border-t border-slate-200 pt-5 sm:flex-row sm:items-center sm:justify-between">
-        <label class="label cursor-pointer justify-start gap-3">
-          <input class="checkbox checkbox-primary" type="checkbox" checked={form.enabled} onChange={(event) => onUpdate("enabled", event.currentTarget.checked)} />
-          <span class="label-text font-semibold">{t("common.enabled")}</span>
+      <div class="flex flex-col gap-3 border-t border-border pt-5 sm:flex-row sm:items-center sm:justify-between">
+        <label class="flex cursor-pointer items-center gap-3">
+          <Checkbox checked={form.enabled} onCheckedChange={(checked) => onUpdate("enabled", checked)} />
+          <span class="font-semibold">{t("common.enabled")}</span>
         </label>
-        <button class={`btn btn-primary min-w-40 ${saving ? "btn-disabled" : ""}`} type="submit" disabled={saving || !servers.length}>
-          {saving ? <span class="loading loading-spinner loading-sm"></span> : null}
-          {saving ? t("common.saving") : t("action.saveEndpoint")}
-        </button>
+        <Button className="min-w-40" type="submit" disabled={saving || !servers.length}>
+            {saving ? <Spinner size="sm" /> : null}
+            {saving ? t("common.saving") : t("action.saveEndpoint")}
+          </Button>
       </div>
     </form>
   );
@@ -2574,37 +2933,37 @@ function APIKeyForm({ form, endpoints, editing, saving, onSubmit, onClear, onUpd
       <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <h3 class="text-lg font-black">{t("apiKey.details")}</h3>
-          <p class="text-sm text-slate-500">{t("apiKey.detailsHelp")}</p>
+          <p class="text-sm text-muted-foreground">{t("apiKey.detailsHelp")}</p>
         </div>
-        <button class="btn btn-ghost" type="button" onClick={onClear}>
+        <button class={cn(buttonVariants({ variant: "ghost" }))} type="button" onClick={onClear}>
           {t("common.clearForm")}
         </button>
       </div>
 
       <div class="grid gap-4 md:grid-cols-2">
         <Field label={t("common.name")}>
-          <input class="input input-bordered w-full" required value={form.name} placeholder={t("apiKey.placeholderName")} onInput={(event) => onUpdate("name", event.currentTarget.value)} />
+          <Input className={cn("w-full")} required value={form.name} placeholder={t("apiKey.placeholderName")} onInput={(event) => onUpdate("name", event.currentTarget.value)} />
         </Field>
         <Field label={showValueInput && editing ? t("apiKey.newValue") : t("apiKey.value")}>
           {showValueInput ? (
             <>
-              <div class="join w-full">
-                <input
-                  class="input input-bordered join-item w-full font-mono"
+              <div class="flex w-full gap-0">
+                <Input
+                  className={cn("rounded-r-none w-full font-mono")}
                   type="text"
                   required={!editing || form.rotateValue}
                   value={form.value}
                   placeholder={t("apiKey.placeholderValue")}
                   onInput={(event) => onUpdate("value", event.currentTarget.value)}
                 />
-                <button class="btn btn-outline join-item" type="button" onClick={() => onUpdate("value", generateAPIKeyValue())}>
+                <button class={cn(buttonVariants({ variant: "outline" }), "rounded-l-none")} type="button" onClick={() => onUpdate("value", generateAPIKeyValue())}>
                   {t("common.generate")}
                 </button>
               </div>
-              <p class="mt-2 text-xs text-slate-500">{editing ? t("apiKey.rotateHelp") : t("apiKey.valueHelp")}</p>
+              <p class="mt-2 text-xs text-muted-foreground">{editing ? t("apiKey.rotateHelp") : t("apiKey.valueHelp")}</p>
               {editing ? (
                 <button
-                  class="btn btn-ghost btn-xs mt-2"
+                  class={cn(buttonVariants({ variant: "ghost", size: "xs" }), "mt-2")}
                   type="button"
                   onClick={() => {
                     onUpdate("value", "");
@@ -2617,13 +2976,13 @@ function APIKeyForm({ form, endpoints, editing, saving, onSubmit, onClear, onUpd
             </>
           ) : (
             <>
-              <div class="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+              <div class="flex items-center justify-between gap-3 rounded-2xl border border-border bg-muted/50 p-3">
                 <div class="min-w-0">
-                  <div class="font-semibold text-slate-900">{t("apiKey.currentValue")}</div>
-                  <p class="mt-1 text-xs text-slate-500">{t("apiKey.currentValueHelp")}</p>
+                  <div class="font-semibold text-foreground">{t("apiKey.currentValue")}</div>
+                  <p class="mt-1 text-xs text-muted-foreground">{t("apiKey.currentValueHelp")}</p>
                 </div>
                 <button
-                  class="btn btn-outline btn-sm shrink-0"
+                  class={cn(buttonVariants({ variant: "outline", size: "sm" }), "shrink-0")}
                   type="button"
                   onClick={() => {
                     onUpdate("rotateValue", true);
@@ -2638,24 +2997,23 @@ function APIKeyForm({ form, endpoints, editing, saving, onSubmit, onClear, onUpd
         </Field>
       </div>
 
-      <div class="rounded-3xl border border-slate-200 bg-base-100 p-4">
+      <div class="rounded-3xl border border-border bg-card p-4">
         <div class="mb-4 flex flex-col gap-1">
           <h3 class="font-black">{t("apiKey.endpointResources")}</h3>
-          <p class="text-sm text-slate-500">{t("apiKey.endpointResourcesHelp")}</p>
+          <p class="text-sm text-muted-foreground">{t("apiKey.endpointResourcesHelp")}</p>
         </div>
         {endpoints.length ? (
           <div class="grid gap-2 md:grid-cols-2">
             {endpoints.map((endpoint) => (
-              <label key={endpoint.id} class="flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-3">
-                <input
-                  class="checkbox checkbox-primary mt-1"
-                  type="checkbox"
+              <label key={endpoint.id} class="flex cursor-pointer items-start gap-3 rounded-2xl border border-border bg-muted/50 p-3">
+                <Checkbox
+                  className="mt-1"
                   checked={form.endpointIds.includes(endpoint.id)}
-                  onChange={(event) => onToggleEndpoint(endpoint.id, event.currentTarget.checked)}
+                  onCheckedChange={(checked) => onToggleEndpoint(endpoint.id, checked)}
                 />
                 <span class="min-w-0">
-                  <span class="block truncate font-bold text-slate-900">{endpoint.name}</span>
-                  <span class="block truncate text-xs text-slate-500">/mcp/{endpoint.id} - {endpoint.enabled ? t("common.enabled") : t("common.disabled")}</span>
+                  <span class="block truncate font-bold text-foreground">{endpoint.name}</span>
+                  <span class="block truncate text-xs text-muted-foreground">/mcp/{endpoint.id} - {endpoint.enabled ? t("common.enabled") : t("common.disabled")}</span>
                 </span>
               </label>
             ))}
@@ -2665,52 +3023,229 @@ function APIKeyForm({ form, endpoints, editing, saving, onSubmit, onClear, onUpd
         )}
       </div>
 
-      <div class="flex flex-col gap-3 border-t border-slate-200 pt-5 sm:flex-row sm:items-center sm:justify-between">
-        <label class="label cursor-pointer justify-start gap-3">
-          <input class="checkbox checkbox-primary" type="checkbox" checked={form.enabled} onChange={(event) => onUpdate("enabled", event.currentTarget.checked)} />
-          <span class="label-text font-semibold">{t("common.enabled")}</span>
+      <div class="flex flex-col gap-3 border-t border-border pt-5 sm:flex-row sm:items-center sm:justify-between">
+        <label class="flex cursor-pointer items-center gap-3">
+          <Checkbox checked={form.enabled} onCheckedChange={(checked) => onUpdate("enabled", checked)} />
+          <span class="font-semibold">{t("common.enabled")}</span>
         </label>
-        <button class={`btn btn-primary min-w-40 ${saving ? "btn-disabled" : ""}`} type="submit" disabled={saving || !endpoints.length}>
-          {saving ? <span class="loading loading-spinner loading-sm"></span> : null}
-          {saving ? t("common.saving") : t("action.saveAPIKey")}
-        </button>
+        <Button className="min-w-40" type="submit" disabled={saving || !endpoints.length}>
+            {saving ? <Spinner size="sm" /> : null}
+            {saving ? t("common.saving") : t("action.saveAPIKey")}
+          </Button>
       </div>
     </form>
   );
 }
 
-function InfoTile({ label, value, code = false }) {
+function statusBadgeVariant(statusClass) {
+  if (statusClass === "status-success") return "success";
+  if (statusClass === "status-error") return "destructive";
+  if (statusClass === "status-warning") return "warning";
+  return "neutral";
+}
+
+const statusDotClass = {
+  success: "bg-emerald-500",
+  destructive: "bg-red-500",
+  warning: "bg-amber-500",
+  neutral: "bg-muted-foreground",
+  default: "bg-primary",
+  secondary: "bg-muted-foreground",
+};
+
+function StatusBadge({ variant, children, className }) {
   return (
-    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div class="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</div>
-      {code ? <code class="mt-2 block overflow-hidden text-ellipsis whitespace-nowrap rounded-lg bg-primary/10 px-2 py-1 text-sm text-primary">{value}</code> : <div class="mt-2 truncate text-sm font-semibold text-slate-700">{value}</div>}
+    <Badge variant={variant} className={cn("gap-1.5", className)}>
+      <span class={cn("inline-block h-1.5 w-1.5 shrink-0 rounded-full", statusDotClass[variant] || statusDotClass.neutral)} />
+      {children}
+    </Badge>
+  );
+}
+
+function CopyButton({ text, onCopied, size = "icon" }) {
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      await writeClipboard(text);
+      setCopied(true);
+      onCopied?.();
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      onCopied?.(true);
+    }
+  }
+
+  if (size === "icon") {
+    return (
+      <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" type="button" onClick={handleCopy} aria-label={copied ? t("action.copied") : t("action.copy")}>
+        {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+      </Button>
+    );
+  }
+
+  return (
+    <Button variant="outline" size="sm" type="button" onClick={handleCopy}>
+      {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+      {copied ? t("action.copied") : t("action.copy")}
+    </Button>
+  );
+}
+
+function CopyField({ value, onCopy }) {
+  return (
+    <div class="copy-field">
+      <code title={value}>{value}</code>
+      <CopyButton text={value} onCopied={onCopy} />
     </div>
   );
 }
 
-function Stat({ title, value, tone = "text-slate-950" }) {
+function InfoTile({ label, value, code = false, copyable = false, onCopy }) {
   return (
-    <div class="metric-card">
-      <div class="text-xs font-semibold text-slate-500">{title}</div>
-      <div class={`mt-3 text-3xl font-black ${tone}`}>{value}</div>
-      <div class="mt-4 h-1.5 rounded-full bg-slate-100">
-        <div class="h-full w-2/3 rounded-full bg-primary/20"></div>
+    <Card>
+      <CardContent className="pt-4">
+        <CardDescription className="text-xs font-medium uppercase tracking-wide">{label}</CardDescription>
+        {copyable ? (
+          <div class="mt-2">
+            <CopyField value={value} onCopy={onCopy} />
+          </div>
+        ) : code ? (
+          <code class="mt-2 block overflow-hidden text-ellipsis whitespace-nowrap rounded-md bg-muted px-2 py-1 font-mono text-xs">{value}</code>
+        ) : (
+          <p class="mt-2 truncate text-sm font-medium">{value}</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function Stat({ title, value, tone = "" }) {
+  return (
+    <Card>
+      <CardHeader className="gap-1 p-4 pb-3">
+        <CardDescription className="text-xs">{title}</CardDescription>
+        <CardTitle className={cn("text-2xl font-bold tabular-nums leading-none", tone)}>{value}</CardTitle>
+      </CardHeader>
+    </Card>
+  );
+}
+
+function OverviewCard({ label, value, detail, status = "neutral" }) {
+  const dotClass = {
+    success: "bg-emerald-500",
+    warning: "bg-amber-500",
+    neutral: "bg-muted-foreground",
+  }[status] || "bg-muted-foreground";
+
+  return (
+    <Card className="bg-muted/30">
+      <CardContent className="pt-4">
+        <div class="flex items-center gap-2">
+          <span class={cn("inline-block h-2 w-2 shrink-0 rounded-full", dotClass)} />
+          <CardDescription className="text-xs font-medium uppercase tracking-wide">{label}</CardDescription>
+        </div>
+        <p class="mt-2 text-2xl font-bold tabular-nums">{value}</p>
+        <p class="mt-1 text-sm text-muted-foreground">{detail}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function GatewayPathsPanel({ endpointPattern, configPath, onCopy }) {
+  const paths = [
+    { label: t("overview.endpointPattern"), value: endpointPattern },
+    { label: t("overview.sqliteDatabase"), value: configPath },
+    { label: t("settings.apiBase"), value: `${location.origin}/api` },
+    { label: t("settings.browserSettings"), value: preferencesStorageKey },
+  ];
+
+  return (
+    <div class="workspace-panel flex h-full flex-col">
+      <div class="section-title">{t("settings.gatewayPaths")}</div>
+      <p class="mt-1 text-sm text-muted-foreground">{t("settings.gatewayPathsDescription")}</p>
+      <div class="mt-4 grid flex-1 gap-4">
+        {paths.map((path) => (
+          <div key={path.label}>
+            <div class="text-xs font-medium uppercase tracking-wide text-muted-foreground">{path.label}</div>
+            <div class="mt-1.5">
+              <CopyField value={path.value} onCopy={onCopy} />
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
 }
 
-function OverviewCard({ label, value, detail }) {
+function NotificationsPanel({ servers, apiKeys, endpoints, runningServers, onCreateServer, onRestart, onEditAPIKey }) {
+  const items = [];
+
+  if (!servers.length) {
+    items.push({
+      type: "info",
+      message: t("notify.noServers"),
+      action: t("action.createServer"),
+      onClick: onCreateServer,
+    });
+  }
+
+  servers.filter((server) => server.enabled && !server.status?.running).forEach((server) => {
+    items.push({
+      type: "warning",
+      message: t("notify.serverStopped", { name: server.name }),
+      action: t("action.restart"),
+      onClick: () => onRestart(server.id),
+    });
+  });
+
+  apiKeys.forEach((key) => {
+    const selectedEndpoints = endpoints.filter((endpoint) => (key.endpointIds || []).includes(endpoint.id));
+    const missingEndpointCount = Math.max((key.endpointIds || []).length - selectedEndpoints.length, 0);
+    if (!selectedEndpoints.length || missingEndpointCount) {
+      items.push({
+        type: "warning",
+        message: t("notify.apiKeyMissingEndpoints", { name: key.name }),
+        action: t("common.edit"),
+        onClick: () => onEditAPIKey(key),
+      });
+    }
+  });
+
+  if (runningServers > 0) {
+    items.push({
+      type: "success",
+      message: t("overview.runningServersAvailable", {
+        count: runningServers,
+        unit: pluralKey(runningServers, "unit.server.one", "unit.server.other"),
+      }),
+    });
+  }
+
   return (
-    <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
-      <div class="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</div>
-      <div class="mt-3 text-2xl font-black text-slate-950">{value}</div>
-      <p class="mt-2 text-sm text-slate-500">{detail}</p>
+    <div class="workspace-panel flex h-full flex-col">
+      <div class="section-title">{t("overview.notifications")}</div>
+      <div class="mt-4 grid flex-1 gap-2">
+        {items.length ? items.map((item, index) => (
+          <div key={index} class={cn("notification-item", item.type === "success" && "notification-item-success", item.type === "warning" && "notification-item-warning", item.type === "info" && "notification-item-info")}>
+            <span class="text-sm leading-snug">{item.message}</span>
+            {item.action ? (
+              <Button variant="outline" size="sm" className="h-7 shrink-0 text-xs" type="button" onClick={item.onClick}>
+                {item.action}
+              </Button>
+            ) : null}
+          </div>
+        )) : (
+          <p class="rounded-lg border border-border bg-muted/40 p-4 text-sm text-muted-foreground">{t("overview.notificationsEmpty")}</p>
+        )}
+      </div>
     </div>
   );
 }
 
-function GettingStartedFlow({ endpointPattern, hasServers, hasEndpoints, onCreateServer, onCreateEndpoint, onCreateAPIKey, onViewTools }) {
+function GettingStartedFlow({ endpointPattern, hasServers, hasEndpoints, hasAPIKeys, onCreateServer, onCreateEndpoint, onCreateAPIKey, onViewTools, onCopyEndpoint }) {
   const steps = [
     {
       number: "01",
@@ -2718,6 +3253,7 @@ function GettingStartedFlow({ endpointPattern, hasServers, hasEndpoints, onCreat
       description: t("overview.flowConnectDescription"),
       action: t("action.createServer"),
       onClick: onCreateServer,
+      complete: hasServers,
     },
     {
       number: "02",
@@ -2726,6 +3262,7 @@ function GettingStartedFlow({ endpointPattern, hasServers, hasEndpoints, onCreat
       action: t("action.createEndpoint"),
       onClick: onCreateEndpoint,
       disabled: !hasServers,
+      complete: hasEndpoints,
     },
     {
       number: "03",
@@ -2734,6 +3271,7 @@ function GettingStartedFlow({ endpointPattern, hasServers, hasEndpoints, onCreat
       action: t("action.createAPIKey"),
       onClick: onCreateAPIKey,
       disabled: !hasEndpoints,
+      complete: hasAPIKeys,
     },
     {
       number: "04",
@@ -2742,6 +3280,7 @@ function GettingStartedFlow({ endpointPattern, hasServers, hasEndpoints, onCreat
       action: t("overview.flowUseAction"),
       onClick: onViewTools,
       code: endpointPattern,
+      complete: hasAPIKeys && hasEndpoints,
     },
   ];
 
@@ -2750,36 +3289,55 @@ function GettingStartedFlow({ endpointPattern, hasServers, hasEndpoints, onCreat
       <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div class="section-title">{t("overview.gettingStarted")}</div>
-          <p class="mt-2 max-w-3xl text-sm text-slate-500">{t("overview.gettingStartedDescription")}</p>
+          <p class="mt-2 max-w-3xl text-sm text-muted-foreground">{t("overview.gettingStartedDescription")}</p>
         </div>
-        <span class="w-fit rounded-full bg-primary/10 px-3 py-1 text-xs font-black uppercase tracking-wide text-primary">{t("overview.flowsLabel")}</span>
+        <Badge variant="secondary">{t("overview.flowsLabel")}</Badge>
       </div>
       <div class="mt-5 grid gap-4 lg:grid-cols-4">
         {steps.map((step) => (
-          <div class="flex h-full flex-col rounded-2xl border border-slate-200 bg-slate-50 p-4" key={step.number}>
-            <div class="flex items-center justify-between gap-3">
-              <span class="rounded-full bg-white px-2.5 py-1 text-xs font-black text-primary shadow-sm">{step.number}</span>
-              {step.disabled ? <span class="text-xs font-bold text-slate-400">{t("common.notConfigured")}</span> : null}
-            </div>
-            <h3 class="mt-4 text-base font-black text-slate-950">{step.title}</h3>
-            <p class="mt-2 flex-1 text-sm leading-6 text-slate-500">{step.description}</p>
-            {step.code ? <code class="mt-4 block overflow-hidden text-ellipsis whitespace-nowrap rounded-xl bg-white px-3 py-2 text-xs font-bold text-primary">{step.code}</code> : null}
-            <button class="btn btn-outline btn-sm mt-4" onClick={step.onClick} disabled={step.disabled}>{step.action}</button>
-          </div>
+          <Card className={cn("flex h-full flex-col", step.complete && "border-emerald-200 dark:border-emerald-900")} key={step.number}>
+            <CardContent className="flex flex-1 flex-col pt-4">
+              <div class="flex items-center justify-between gap-3">
+                <Badge variant={step.complete ? "success" : "outline"}>{step.complete ? t("overview.stepComplete") : step.number}</Badge>
+                {step.disabled ? <span class="text-xs text-muted-foreground">{t("common.notConfigured")}</span> : null}
+              </div>
+              <h3 class="mt-4 text-sm font-semibold">{step.title}</h3>
+              <p class="mt-2 flex-1 text-sm leading-relaxed text-muted-foreground">{step.description}</p>
+              {step.code ? (
+                <div class="mt-4">
+                  <CopyField value={step.code} onCopy={onCopyEndpoint} />
+                </div>
+              ) : null}
+              <Button className="mt-4" variant={step.complete ? "secondary" : "outline"} size="sm" onClick={step.onClick} disabled={step.disabled}>{step.action}</Button>
+            </CardContent>
+          </Card>
         ))}
       </div>
     </section>
   );
 }
 
+function RowActionMenu({ label, children }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={label}>
+          <MoreHorizontal className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-36">
+        {children}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function Field({ label, children, wide = false }) {
   return (
-    <label class={wide ? "form-control xl:col-span-2" : "form-control"}>
-      <div class="label">
-        <span class="label-text font-bold">{label}</span>
-      </div>
+    <div class={cn("grid gap-2", wide && "md:col-span-2 xl:col-span-4")}>
+      <Label>{label}</Label>
       {children}
-    </label>
+    </div>
   );
 }
 
@@ -2804,65 +3362,65 @@ function AuthAndHeaders({
   onRemoveHeader,
 }) {
   return (
-    <div class="rounded-3xl border border-slate-200 bg-base-100 p-4">
+    <div class="rounded-3xl border border-border bg-card p-4">
       <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h3 class="font-black">{t("auth.title")}</h3>
-          <p class="text-sm text-slate-500">{t("auth.description")}</p>
+          <p class="text-sm text-muted-foreground">{t("auth.description")}</p>
         </div>
-        <button class="btn btn-sm btn-outline" type="button" onClick={onAddHeader}>
+        <button class={cn(buttonVariants({ variant: "outline", size: "sm" }))} type="button" onClick={onAddHeader}>
           {t("action.addHeader")}
         </button>
       </div>
 
       <div class="grid gap-4 lg:grid-cols-3">
         <Field label={t("auth.type")}>
-          <select class="select select-bordered w-full" value={authType} onChange={(event) => onAuthType(event.currentTarget.value)}>
+          <NativeSelect className={cn("w-full")} value={authType} onChange={(event) => onAuthType(event.currentTarget.value)}>
             <option value="none">{t("auth.none")}</option>
             <option value="apiKey">{t("auth.apiKey")}</option>
             <option value="bearer">{t("auth.bearer")}</option>
             <option value="jwtBearer">{t("auth.jwtBearer")}</option>
             <option value="basic">{t("auth.basic")}</option>
-          </select>
+          </NativeSelect>
         </Field>
         {authType === "apiKey" ? (
           <>
             <Field label={t("auth.keyName")}>
-              <input class="input input-bordered w-full" value={apiKeyName} placeholder={t("auth.placeholderKeyName")} onInput={(event) => onAPIKeyName(event.currentTarget.value)} />
+              <Input className={cn("w-full")} value={apiKeyName} placeholder={t("auth.placeholderKeyName")} onInput={(event) => onAPIKeyName(event.currentTarget.value)} />
             </Field>
             <Field label={t("auth.addTo")}>
-              <select class="select select-bordered w-full" value={apiKeyIn} onChange={(event) => onAPIKeyIn(event.currentTarget.value)}>
+              <NativeSelect className={cn("w-full")} value={apiKeyIn} onChange={(event) => onAPIKeyIn(event.currentTarget.value)}>
                 <option value="header">{t("auth.header")}</option>
                 <option value="query">{t("auth.queryParam")}</option>
-              </select>
+              </NativeSelect>
             </Field>
             <Field label={t("auth.apiKeyValue")} wide>
-              <input class="input input-bordered w-full font-mono" value={apiKeyValue} placeholder={t("auth.placeholderAPIKeyValue")} onInput={(event) => onAPIKeyValue(event.currentTarget.value)} />
-              <p class="mt-2 text-xs text-slate-500">{t("auth.apiKeyHelp")}</p>
+              <Input className={cn("w-full font-mono")} value={apiKeyValue} placeholder={t("auth.placeholderAPIKeyValue")} onInput={(event) => onAPIKeyValue(event.currentTarget.value)} />
+              <p class="mt-2 text-xs text-muted-foreground">{t("auth.apiKeyHelp")}</p>
             </Field>
           </>
         ) : null}
         {authType === "bearer" || authType === "jwtBearer" ? (
           <Field label={authType === "jwtBearer" ? t("auth.jwtTokenEnv") : t("auth.bearerTokenEnv")} wide>
-            <input class="input input-bordered w-full font-mono" value={token} placeholder={t("auth.placeholderBearerToken")} onInput={(event) => onToken(event.currentTarget.value)} />
-            <p class="mt-2 text-xs text-slate-500">{t("auth.bearerHelp")}</p>
+            <Input className={cn("w-full font-mono")} value={token} placeholder={t("auth.placeholderBearerToken")} onInput={(event) => onToken(event.currentTarget.value)} />
+            <p class="mt-2 text-xs text-muted-foreground">{t("auth.bearerHelp")}</p>
           </Field>
         ) : null}
         {authType === "basic" ? (
           <>
             <Field label={t("auth.username")}>
-              <input class="input input-bordered w-full" value={username} placeholder={t("auth.placeholderBasicUser")} onInput={(event) => onUsername(event.currentTarget.value)} />
+              <Input className={cn("w-full")} value={username} placeholder={t("auth.placeholderBasicUser")} onInput={(event) => onUsername(event.currentTarget.value)} />
             </Field>
             <Field label={t("auth.password")}>
-              <input class="input input-bordered w-full" type="password" value={password} placeholder={t("auth.placeholderBasicPassword")} onInput={(event) => onPassword(event.currentTarget.value)} />
+              <Input className={cn("w-full")} type="password" value={password} placeholder={t("auth.placeholderBasicPassword")} onInput={(event) => onPassword(event.currentTarget.value)} />
             </Field>
           </>
         ) : null}
         {authType === "none" ? <div class="hidden lg:block lg:col-span-2"></div> : null}
       </div>
 
-      <div class="divider my-4">{t("auth.headers")}</div>
-      <div class="hidden grid-cols-[auto_1fr_1fr_auto] gap-2 px-2 text-xs font-bold uppercase tracking-wide text-slate-500 md:grid">
+      <div class="my-4 border-t border-border pt-4 text-sm font-semibold text-muted-foreground">{t("auth.headers")}</div>
+      <div class="hidden grid-cols-[auto_1fr_1fr_auto] gap-2 px-2 text-xs font-bold uppercase tracking-wide text-muted-foreground md:grid">
         <span>{t("common.on")}</span>
         <span>{t("common.key")}</span>
         <span>{t("common.value")}</span>
@@ -2870,14 +3428,14 @@ function AuthAndHeaders({
       </div>
       <div class="grid gap-2">
         {headers.map((row, index) => (
-          <div key={index} class="grid gap-2 rounded-2xl border border-slate-100 bg-slate-50 p-2 md:grid-cols-[auto_1fr_1fr_auto] md:items-center md:border-0 md:bg-transparent md:p-0">
-            <label class="label cursor-pointer justify-start gap-2 md:justify-center">
-              <input class="checkbox checkbox-primary checkbox-sm" type="checkbox" checked={row.enabled} onChange={(event) => onHeaderChange(index, "enabled", event.currentTarget.checked)} />
-              <span class="label-text md:hidden">{t("common.enabled")}</span>
+          <div key={index} class="grid gap-2 rounded-2xl border border-border bg-muted/50 p-2 md:grid-cols-[auto_1fr_1fr_auto] md:items-center md:border-0 md:bg-transparent md:p-0">
+            <label class="flex cursor-pointer items-center gap-2 md:justify-center">
+              <Checkbox checked={row.enabled} onCheckedChange={(checked) => onHeaderChange(index, "enabled", checked)} />
+              <span class="md:hidden">{t("common.enabled")}</span>
             </label>
-            <input class="input input-bordered input-sm w-full" value={row.key} placeholder={t("auth.placeholderHeaderName")} onInput={(event) => onHeaderChange(index, "key", event.currentTarget.value)} />
-            <input class="input input-bordered input-sm w-full font-mono" value={row.value} placeholder={t("auth.placeholderHeaderValue")} onInput={(event) => onHeaderChange(index, "value", event.currentTarget.value)} />
-            <button class="btn btn-ghost btn-sm" type="button" onClick={() => onRemoveHeader(index)}>
+            <Input className={cn("h-8 w-full text-xs")} value={row.key} placeholder={t("auth.placeholderHeaderName")} onInput={(event) => onHeaderChange(index, "key", event.currentTarget.value)} />
+            <Input className={cn("h-8 w-full font-mono text-xs")} value={row.value} placeholder={t("auth.placeholderHeaderValue")} onInput={(event) => onHeaderChange(index, "value", event.currentTarget.value)} />
+            <button class={cn(buttonVariants({ variant: "ghost", size: "sm" }))} type="button" onClick={() => onRemoveHeader(index)}>
               {t("common.remove")}
             </button>
           </div>
@@ -2888,9 +3446,7 @@ function AuthAndHeaders({
 }
 
 function ListPanel({
-  title,
   subtitle,
-  action,
   searchValue,
   onSearch,
   pageSize,
@@ -2918,74 +3474,59 @@ function ListPanel({
   const addableFilters = availableFilterFields(tableId, filters);
   return (
     <div class="workspace-panel">
-      <div class="grid gap-4">
-        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h2 class="text-lg font-bold text-slate-950">{title}</h2>
-            <p class="text-sm text-slate-500">{subtitle}</p>
-          </div>
-          {action}
-        </div>
-        <div class="border-b border-slate-200">
-          <button class="tab-button tab-button-active" type="button">{title}</button>
-        </div>
+      <div class="grid gap-3">
+        {subtitle ? <p class="text-sm text-muted-foreground">{subtitle}</p> : null}
         <div class="table-toolbar">
           <div class="toolbar-left">
             <label class="search-control">
-              <span>⌕</span>
+              <Search className="h-4 w-4 shrink-0 opacity-60" />
               <input placeholder={t("common.search")} value={searchValue} onInput={(event) => onSearch(event.currentTarget.value)} />
             </label>
             {showAdvancedControls ? (
-              <div class="dropdown dropdown-end">
-                <button class="filter-button" type="button" tabIndex="0" disabled={!addableFilters.length}>
-                  <span>+</span>
-                  {t("action.addFilter")}
-                </button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button class="filter-button" type="button" disabled={!addableFilters.length}>
+                    <Plus className="h-4 w-4" />
+                    {t("action.addFilter")}
+                  </button>
+                </DropdownMenuTrigger>
                 {addableFilters.length ? (
-                  <div class="dropdown-content z-20 mt-2 w-56 rounded-xl border border-slate-200 bg-white p-2 shadow-lg" tabIndex="0">
-                    <div class="mb-2 px-2 text-xs font-bold uppercase tracking-wide text-slate-500">{t("action.filtersTitle")}</div>
+                  <DropdownMenuContent align="end" className="w-56">
+                    <div class="mb-2 px-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">{t("action.filtersTitle")}</div>
                     {addableFilters.map((field) => (
-                      <button
-                        key={field.id}
-                        class="btn btn-ghost btn-sm w-full justify-start"
-                        type="button"
-                        onClick={() => onAddFilter?.(field.id)}
-                      >
+                      <DropdownMenuItem key={field.id} onClick={() => onAddFilter?.(field.id)}>
                         {t(field.labelKey)}
-                      </button>
+                      </DropdownMenuItem>
                     ))}
-                  </div>
+                  </DropdownMenuContent>
                 ) : null}
-              </div>
+              </DropdownMenu>
             ) : null}
           </div>
           {showAdvancedControls ? (
             <div class="toolbar-right">
               <button class={`control-button ${sortActive ? "control-button-active" : ""}`} type="button" onClick={onToggleSort}>
-                ↕ {t("action.lastExecuted")}
+                <ArrowUpDown className="h-3.5 w-3.5" />
+                {t("action.lastExecuted")}
               </button>
-              <div class="dropdown dropdown-end">
-                <button class="control-button" type="button" tabIndex="0">
-                  {t("action.columns", { shown: visibleColumns.length, total: columns.length })}
-                </button>
-                <div class="dropdown-content z-20 mt-2 w-56 rounded-xl border border-slate-200 bg-white p-3 shadow-lg" tabIndex="0">
-                  <div class="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">{t("action.columnsTitle")}</div>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button class="control-button" type="button">
+                    {t("action.columns", { shown: visibleColumns.length, total: columns.length })}
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56 p-3">
+                  <div class="mb-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">{t("action.columnsTitle")}</div>
                   <div class="grid gap-2">
                     {columns.map((column) => (
-                      <label key={column.id} class="flex cursor-pointer items-center gap-2 text-sm text-slate-700">
-                        <input
-                          class="checkbox checkbox-primary checkbox-sm"
-                          type="checkbox"
-                          checked={columnVisible(visibleColumns, column.id)}
-                          disabled={visibleColumns.length === 1 && columnVisible(visibleColumns, column.id)}
-                          onChange={() => onToggleColumn?.(column.id)}
-                        />
+                      <label key={column.id} class="flex cursor-pointer items-center gap-2 text-sm text-foreground">
+                        <Checkbox checked={columnVisible(visibleColumns, column.id)} disabled={visibleColumns.length === 1 && columnVisible(visibleColumns, column.id)} onCheckedChange={() => onToggleColumn?.(column.id)} />
                         <span>{t(column.labelKey)}</span>
                       </label>
                     ))}
                   </div>
-                </div>
-              </div>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           ) : null}
         </div>
@@ -3017,7 +3558,7 @@ function ListPanel({
             </button>
           </div>
         ) : null}
-        <div class="min-h-80 overflow-x-auto rounded-xl border border-slate-200">{children}</div>
+        <div class="min-h-80 overflow-x-auto rounded-lg border border-border">{children}</div>
         <div class="pagination-bar">
           <div class="pagination-size">
             <select value={pageSize} onChange={(event) => onPageSize(event.currentTarget.value)}>
@@ -3029,8 +3570,8 @@ function ListPanel({
           </div>
           <span class="pagination-page">{t("list.pageOf", { page, pages })}</span>
           <div class="pagination-actions">
-            <button type="button" onClick={prev} disabled={page <= 1} aria-label={t("action.previousPage")}>‹</button>
-            <button type="button" onClick={next} disabled={page >= pages} aria-label={t("action.nextPage")}>›</button>
+            <button type="button" onClick={prev} disabled={page <= 1} aria-label={t("action.previousPage")}><ChevronLeft className="h-4 w-4" /></button>
+            <button type="button" onClick={next} disabled={page >= pages} aria-label={t("action.nextPage")}><ChevronRight className="h-4 w-4" /></button>
           </div>
         </div>
       </div>
@@ -3048,7 +3589,121 @@ function TableHeader({ tableId, visibleColumns }) {
   );
 }
 
-function ServerCard({ server, testing, onEdit, onRestart, onTest, onToggleEnabled, onDelete, visibleColumns }) {
+function ResourceNotFound({ message, onBack }) {
+  return (
+    <section class="workspace-panel">
+      <p class="text-sm text-muted-foreground">{message}</p>
+      <button class={cn(buttonVariants({ variant: "outline", size: "sm" }), "mt-4")} type="button" onClick={onBack}>
+        {t("common.back")}
+      </button>
+    </section>
+  );
+}
+
+function ServerDetailPage({ server, testing, onEdit, onRestart, onTest, onToggleEnabled, onDelete }) {
+  const disabled = !server.enabled;
+  const running = !disabled && server.status?.running;
+  const statusLabel = disabled ? t("common.disabled") : running ? t("common.running") : t("common.stopped");
+  const statusClass = disabled ? "status-neutral" : running ? "status-success" : "status-error";
+  const usage = server.usage || {};
+
+  return (
+    <section class="workspace-panel workspace-stack">
+      <div class="flex flex-wrap items-center gap-3">
+        <Badge variant={statusBadgeVariant(statusClass)}>{statusLabel}</Badge>
+        <span class="text-sm text-muted-foreground">{server.id}</span>
+      </div>
+      <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <InfoTile label={t("common.name")} value={server.name} />
+        <InfoTile label={t("common.status")} value={statusLabel} />
+        <InfoTile label={t("table.target")} value={`${server.transport || "stdio"} - ${targetFor(server)}`} code />
+        <InfoTile
+          label={t("common.usage")}
+          value={`${usage.totalCalls || 0} ${pluralKey(usage.totalCalls || 0, "unit.call.one", "unit.call.other")}`}
+        />
+        <InfoTile label={t("table.createdAt")} value={formatTimestamp(server.createdAt)} />
+        <InfoTile label={t("table.updatedAt")} value={formatTimestamp(server.updatedAt)} />
+      </div>
+      {server.status?.error ? <div class="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">{server.status.error}</div> : null}
+      <div class="flex flex-wrap gap-2">
+        <button class={cn(buttonVariants({ variant: "outline", size: "sm" }))} type="button" onClick={() => onEdit(server)}>
+          {t("common.edit")}
+        </button>
+        <button class={cn(buttonVariants({ variant: "outline", size: "sm" }))} type="button" onClick={() => onTest(server.id)} disabled={testing}>
+          {testing ? t("common.testing") : t("common.test")}
+        </button>
+        <button class={cn(buttonVariants({ variant: "outline", size: "sm" }))} type="button" onClick={() => onRestart(server.id)} disabled={disabled}>
+          {t("action.restart")}
+        </button>
+        <button class={cn(buttonVariants({ variant: "outline", size: "sm" }))} type="button" onClick={() => onToggleEnabled(server)}>
+          {disabled ? t("common.enable") : t("common.disable")}
+        </button>
+        <button class={cn(buttonVariants({ variant: "outline", size: "sm" }), "text-destructive")} type="button" onClick={() => onDelete(server.id)}>
+          {t("common.delete")}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function EndpointDetailPage({ endpoint, servers, onEdit, onCopyCurl, onToggleEnabled, onDelete }) {
+  const disabled = !endpoint.enabled;
+  const usage = endpoint.usage || {};
+  const limit = usage.limitPerMinute || endpoint.rateLimit?.requestsPerMinute || 0;
+  const limitLabel = limit ? t("endpoint.limitLeft", { remaining: usage.remainingThisMinute ?? limit, limit }) : t("common.unlimited");
+  const selectedServers = servers.filter((server) => (endpoint.serverIds || []).includes(server.id));
+
+  return (
+    <section class="workspace-panel workspace-stack">
+      <div class="flex flex-wrap items-center gap-3">
+        <Badge variant={disabled ? "neutral" : "success"}>{disabled ? t("common.disabled") : t("common.enabled")}</Badge>
+        <span class="text-sm text-muted-foreground">{endpoint.id}</span>
+      </div>
+      <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <InfoTile label={t("common.name")} value={endpoint.name} />
+        <InfoTile label={t("table.mcpUrl")} value={endpointUrl(endpoint)} code />
+        <InfoTile label={t("common.description")} value={endpoint.description || t("common.notSet")} />
+        <InfoTile label={t("table.rateLimit")} value={limitLabel} />
+        <InfoTile
+          label={t("common.usage")}
+          value={`${usage.totalCalls || 0} ${pluralKey(usage.totalCalls || 0, "unit.call.one", "unit.call.other")}`}
+        />
+        <InfoTile label={t("table.createdAt")} value={formatTimestamp(endpoint.createdAt)} />
+        <InfoTile label={t("table.updatedAt")} value={formatTimestamp(endpoint.updatedAt)} />
+      </div>
+      <div>
+        <div class="section-title">{t("endpoint.mcpServers")}</div>
+        <div class="mt-3 flex flex-wrap gap-2">
+          {selectedServers.length ? (
+            selectedServers.map((server) => (
+              <a key={server.id} class={cn(buttonVariants({ variant: "outline", size: "sm" }))} href={pathForRoute("servers", server.id)}>
+                {server.name}
+              </a>
+            ))
+          ) : (
+            <p class="text-sm text-muted-foreground">{t("card.noActiveServerRecords")}</p>
+          )}
+        </div>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <button class={cn(buttonVariants({ variant: "outline", size: "sm" }))} type="button" onClick={() => onEdit(endpoint)}>
+          {t("common.edit")}
+        </button>
+        <button class={cn(buttonVariants({ variant: "outline", size: "sm" }))} type="button" onClick={() => onCopyCurl(endpoint)}>
+          {t("action.copyCurl")}
+        </button>
+        <button class={cn(buttonVariants({ variant: "outline", size: "sm" }))} type="button" onClick={() => onToggleEnabled(endpoint)}>
+          {disabled ? t("common.enable") : t("common.disable")}
+        </button>
+        <button class={cn(buttonVariants({ variant: "outline", size: "sm" }), "text-destructive")} type="button" onClick={() => onDelete(endpoint.id)}>
+          {t("common.delete")}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function ServerCard({ server, testing, onOpen, onEdit, onRestart, onTest, onToggleEnabled, onDelete, visibleColumns }) {
   const disabled = !server.enabled;
   const running = !disabled && server.status?.running;
   const statusLabel = disabled ? t("common.disabled") : running ? t("common.running") : t("common.stopped");
@@ -3057,48 +3712,43 @@ function ServerCard({ server, testing, onEdit, onRestart, onTest, onToggleEnable
   const usageLabel = `${usage.totalCalls || 0} ${pluralKey(usage.totalCalls || 0, "unit.call.one", "unit.call.other")}`;
 
   return (
-    <div class="data-row" style={{ gridTemplateColumns: tableGridTemplate("servers", visibleColumns, true) }}>
+    <div class="data-row data-row-interactive" style={{ gridTemplateColumns: tableGridTemplate("servers", visibleColumns, true) }}>
       {columnVisible(visibleColumns, "name") ? (
         <div class="min-w-0">
-          <div class="truncate font-semibold text-slate-900">{server.name}</div>
+          <a class="truncate font-semibold text-foreground hover:text-foreground" href={pathForRoute("servers", server.id)} onClick={(event) => { event.preventDefault(); onOpen(server); }}>
+            {server.name}
+          </a>
         </div>
       ) : null}
-      {columnVisible(visibleColumns, "target") ? <div class="truncate text-sm text-slate-600">{server.transport || "stdio"} - {targetFor(server)}</div> : null}
+      {columnVisible(visibleColumns, "target") ? <div class="truncate text-sm text-muted-foreground">{server.transport || "stdio"} - {targetFor(server)}</div> : null}
       {columnVisible(visibleColumns, "status") ? (
         <div>
-          <span class={`status-pill ${statusClass}`}>{statusLabel}</span>
-          {server.status?.error ? <div class="mt-1 truncate text-xs text-error">{server.status.error}</div> : null}
+          <StatusBadge variant={statusBadgeVariant(statusClass)}>{statusLabel}</StatusBadge>
+          {server.status?.error ? <div class="mt-1 truncate text-xs text-destructive">{server.status.error}</div> : null}
         </div>
       ) : null}
       {columnVisible(visibleColumns, "usage") ? (
-        <div class="text-sm text-slate-500">
-          <div class="font-semibold text-slate-700">{usageLabel}</div>
+        <div class="text-sm text-muted-foreground">
+          <div class="font-semibold text-foreground">{usageLabel}</div>
           <div class="mt-1 text-xs">{usage.successfulCalls || 0} {t("common.ok")} / {usage.failedCalls || 0} {t("common.failed")}</div>
         </div>
       ) : null}
       {columnVisible(visibleColumns, "createdAt") ? <TimestampCell value={server.createdAt} /> : null}
       {columnVisible(visibleColumns, "updatedAt") ? <TimestampCell value={server.updatedAt} /> : null}
       <div class="flex justify-end">
-        <div class="dropdown dropdown-end">
-          <button class="btn btn-ghost btn-xs action-menu-trigger" type="button" tabIndex="0" aria-label={t("card.openActions", { name: server.name })}>
-            <span></span>
-            <span></span>
-            <span></span>
-          </button>
-          <ul class="menu dropdown-content z-20 mt-2 w-36 rounded-xl border border-slate-200 bg-white p-1 shadow-lg" tabIndex="0">
-            <li><button type="button" onClick={() => onEdit(server)}>{t("common.edit")}</button></li>
-            <li><button type="button" onClick={() => onTest(server.id)} disabled={testing}>{testing ? t("common.testing") : t("common.test")}</button></li>
-            <li><button type="button" onClick={() => onRestart(server.id)} disabled={disabled}>{t("action.restart")}</button></li>
-            <li><button type="button" onClick={() => onToggleEnabled(server)}>{disabled ? t("common.enable") : t("common.disable")}</button></li>
-            <li><button class="text-error" type="button" onClick={() => onDelete(server.id)}>{t("common.delete")}</button></li>
-          </ul>
-        </div>
+        <RowActionMenu label={t("card.openActions", { name: server.name })}>
+        <DropdownMenuItem onClick={() => onEdit(server)}>{t("common.edit")}</DropdownMenuItem>
+        <DropdownMenuItem onClick={() => onTest(server.id)} disabled={testing}>{testing ? t("common.testing") : t("common.test")}</DropdownMenuItem>
+        <DropdownMenuItem onClick={() => onRestart(server.id)} disabled={disabled}>{t("action.restart")}</DropdownMenuItem>
+        <DropdownMenuItem onClick={() => onToggleEnabled(server)}>{disabled ? t("common.enable") : t("common.disable")}</DropdownMenuItem>
+        <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => onDelete(server.id)}>{t("common.delete")}</DropdownMenuItem>
+      </RowActionMenu>
       </div>
     </div>
   );
 }
 
-function EndpointCard({ endpoint, servers, onEdit, onToggleEnabled, onDelete, visibleColumns }) {
+function EndpointCard({ endpoint, servers, onOpen, onEdit, onCopyCurl, onToggleEnabled, onDelete, visibleColumns, onCopyUrl }) {
   const disabled = !endpoint.enabled;
   const usage = endpoint.usage || {};
   const limit = usage.limitPerMinute || endpoint.rateLimit?.requestsPerMinute || 0;
@@ -3106,21 +3756,24 @@ function EndpointCard({ endpoint, servers, onEdit, onToggleEnabled, onDelete, vi
   const limitLabel = limit ? t("endpoint.limitLeft", { remaining: usage.remainingThisMinute ?? limit, limit }) : t("common.unlimited");
   const selectedServers = servers.filter((server) => (endpoint.serverIds || []).includes(server.id));
   const missingServerCount = Math.max((endpoint.serverIds || []).length - selectedServers.length, 0);
+  const url = endpointUrl(endpoint);
 
   return (
-    <div class="data-row" style={{ gridTemplateColumns: tableGridTemplate("endpoints", visibleColumns, true) }}>
+    <div class="data-row data-row-interactive" style={{ gridTemplateColumns: tableGridTemplate("endpoints", visibleColumns, true) }}>
       {columnVisible(visibleColumns, "name") ? (
         <div class="min-w-0">
-          <div class="truncate font-semibold text-slate-900">{endpoint.name}</div>
-          <div class="mt-1 flex items-center gap-2 text-xs text-slate-500">
-            <span class={`status-pill ${disabled ? "status-neutral" : "status-success"}`}>{disabled ? t("common.disabled") : t("common.enabled")}</span>
+          <a class="truncate font-semibold text-foreground hover:text-foreground" href={pathForRoute("endpoints", endpoint.id)} onClick={(event) => { event.preventDefault(); onOpen(endpoint); }}>
+            {endpoint.name}
+          </a>
+          <div class="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+            <StatusBadge variant={disabled ? "neutral" : "success"}>{disabled ? t("common.disabled") : t("common.enabled")}</StatusBadge>
           </div>
         </div>
       ) : null}
-      {columnVisible(visibleColumns, "url") ? <code class="truncate rounded-lg bg-primary/10 px-2 py-1 text-xs text-primary">{endpointUrl(endpoint)}</code> : null}
+      {columnVisible(visibleColumns, "url") ? <CopyField value={url} onCopy={onCopyUrl} /> : null}
       {columnVisible(visibleColumns, "servers") ? (
-        <div class="text-sm text-slate-500">
-          <div class="font-semibold text-slate-700">{selectedServers.length} {pluralKey(selectedServers.length, "unit.server.one", "unit.server.other")}</div>
+        <div class="text-sm text-muted-foreground">
+          <div class="font-semibold text-foreground">{selectedServers.length} {pluralKey(selectedServers.length, "unit.server.one", "unit.server.other")}</div>
           <div class="mt-1 line-clamp-2 text-xs">
             {selectedServers.map((server) => server.name).join(", ") || t("card.noActiveServerRecords")}
             {missingServerCount ? `, ${missingServerCount} ${t("common.missing")}` : ""}
@@ -3128,32 +3781,26 @@ function EndpointCard({ endpoint, servers, onEdit, onToggleEnabled, onDelete, vi
         </div>
       ) : null}
       {columnVisible(visibleColumns, "usage") ? (
-        <div class="text-sm text-slate-500">
-          <div class="font-semibold text-slate-700">{usageLabel}</div>
+        <div class="text-sm text-muted-foreground">
+          <div class="font-semibold text-foreground">{usageLabel}</div>
           <div class="mt-1 text-xs">{usage.successfulCalls || 0} {t("common.ok")} / {usage.failedCalls || 0} {t("common.failed")} / {usage.rateLimitedCalls || 0} {t("common.limited")}</div>
         </div>
       ) : null}
       {columnVisible(visibleColumns, "rateLimit") ? (
-        <div class="text-sm text-slate-500">
-          <div class="font-semibold text-slate-700">{limitLabel}</div>
+        <div class="text-sm text-muted-foreground">
+          <div class="font-semibold text-foreground">{limitLabel}</div>
           <div class="mt-1 text-xs">{t("endpoint.quota")}</div>
         </div>
       ) : null}
       {columnVisible(visibleColumns, "createdAt") ? <TimestampCell value={endpoint.createdAt} /> : null}
       {columnVisible(visibleColumns, "updatedAt") ? <TimestampCell value={endpoint.updatedAt} /> : null}
       <div class="flex justify-end">
-        <div class="dropdown dropdown-end">
-          <button class="btn btn-ghost btn-xs action-menu-trigger" type="button" tabIndex="0" aria-label={t("card.openActions", { name: endpoint.name })}>
-            <span></span>
-            <span></span>
-            <span></span>
-          </button>
-          <ul class="menu dropdown-content z-20 mt-2 w-36 rounded-xl border border-slate-200 bg-white p-1 shadow-lg" tabIndex="0">
-            <li><button type="button" onClick={() => onEdit(endpoint)}>{t("common.edit")}</button></li>
-            <li><button type="button" onClick={() => onToggleEnabled(endpoint)}>{disabled ? t("common.enable") : t("common.disable")}</button></li>
-            <li><button class="text-error" type="button" onClick={() => onDelete(endpoint.id)}>{t("common.delete")}</button></li>
-          </ul>
-        </div>
+        <RowActionMenu label={t("card.openActions", { name: endpoint.name })}>
+        <DropdownMenuItem onClick={() => onEdit(endpoint)}>{t("common.edit")}</DropdownMenuItem>
+        <DropdownMenuItem onClick={() => onCopyCurl(endpoint)}>{t("action.copyCurl")}</DropdownMenuItem>
+        <DropdownMenuItem onClick={() => onToggleEnabled(endpoint)}>{disabled ? t("common.enable") : t("common.disable")}</DropdownMenuItem>
+        <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => onDelete(endpoint.id)}>{t("common.delete")}</DropdownMenuItem>
+      </RowActionMenu>
       </div>
     </div>
   );
@@ -3165,16 +3812,16 @@ function APIKeyCard({ apiKey, endpoints, onEdit, onDelete, visibleColumns }) {
   const missingEndpointCount = Math.max((apiKey.endpointIds || []).length - selectedEndpoints.length, 0);
 
   return (
-    <div class="data-row" style={{ gridTemplateColumns: tableGridTemplate("apiKeys", visibleColumns, true) }}>
+    <div class="data-row data-row-interactive" style={{ gridTemplateColumns: tableGridTemplate("apiKeys", visibleColumns, true) }}>
       {columnVisible(visibleColumns, "name") ? (
         <div class="min-w-0">
-          <div class="truncate font-semibold text-slate-900">{apiKey.name}</div>
-          <div class="mt-1 truncate font-mono text-xs text-slate-500">{apiKey.id}</div>
+          <div class="truncate font-semibold text-foreground">{apiKey.name}</div>
+          <div class="mt-1 truncate font-mono text-xs text-muted-foreground">{apiKey.id}</div>
         </div>
       ) : null}
       {columnVisible(visibleColumns, "resources") ? (
-        <div class="text-sm text-slate-500">
-          <div class="font-semibold text-slate-700">{selectedEndpoints.length} {pluralKey(selectedEndpoints.length, "unit.endpoint.one", "unit.endpoint.other")}</div>
+        <div class="text-sm text-muted-foreground">
+          <div class="font-semibold text-foreground">{selectedEndpoints.length} {pluralKey(selectedEndpoints.length, "unit.endpoint.one", "unit.endpoint.other")}</div>
           <div class="mt-1 line-clamp-2 text-xs">
             {selectedEndpoints.map((endpoint) => endpoint.name).join(", ") || t("card.noActiveEndpointRecords")}
             {missingEndpointCount ? `, ${missingEndpointCount} ${t("common.missing")}` : ""}
@@ -3183,23 +3830,16 @@ function APIKeyCard({ apiKey, endpoints, onEdit, onDelete, visibleColumns }) {
       ) : null}
       {columnVisible(visibleColumns, "status") ? (
         <div>
-          <span class={`status-pill ${disabled ? "status-neutral" : "status-success"}`}>{disabled ? t("common.disabled") : t("common.enabled")}</span>
+          <StatusBadge variant={disabled ? "neutral" : "success"}>{disabled ? t("common.disabled") : t("common.enabled")}</StatusBadge>
         </div>
       ) : null}
       {columnVisible(visibleColumns, "createdAt") ? <TimestampCell value={apiKey.createdAt} /> : null}
       {columnVisible(visibleColumns, "updatedAt") ? <TimestampCell value={apiKey.updatedAt} /> : null}
       <div class="flex justify-end">
-        <div class="dropdown dropdown-end">
-          <button class="btn btn-ghost btn-xs action-menu-trigger" type="button" tabIndex="0" aria-label={t("card.openActions", { name: apiKey.name })}>
-            <span></span>
-            <span></span>
-            <span></span>
-          </button>
-          <ul class="menu dropdown-content z-20 mt-2 w-36 rounded-xl border border-slate-200 bg-white p-1 shadow-lg" tabIndex="0">
-            <li><button type="button" onClick={() => onEdit(apiKey)}>{t("common.edit")}</button></li>
-            <li><button class="text-error" type="button" onClick={() => onDelete(apiKey.id)}>{t("common.delete")}</button></li>
-          </ul>
-        </div>
+        <RowActionMenu label={t("card.openActions", { name: apiKey.name })}>
+        <DropdownMenuItem onClick={() => onEdit(apiKey)}>{t("common.edit")}</DropdownMenuItem>
+        <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => onDelete(apiKey.id)}>{t("common.delete")}</DropdownMenuItem>
+      </RowActionMenu>
       </div>
     </div>
   );
@@ -3208,20 +3848,27 @@ function APIKeyCard({ apiKey, endpoints, onEdit, onDelete, visibleColumns }) {
 function ToolCard({ tool, visibleColumns }) {
   const description = tool.description || t("card.noDescription");
   return (
-    <div class="data-row" style={{ gridTemplateColumns: tableGridTemplate("tools", visibleColumns) }}>
+    <div class="data-row data-row-interactive" style={{ gridTemplateColumns: tableGridTemplate("tools", visibleColumns) }}>
       {columnVisible(visibleColumns, "name") ? (
         <div title={tool.name}>
           <div class="truncate font-mono text-sm font-semibold text-primary">{tool.name}</div>
         </div>
       ) : null}
-      {columnVisible(visibleColumns, "server") ? <div class="truncate text-sm text-slate-600">{tool.serverName}</div> : null}
+      {columnVisible(visibleColumns, "server") ? <div class="truncate text-sm text-muted-foreground">{tool.serverName}</div> : null}
       {columnVisible(visibleColumns, "nativeName") ? (
         <div title={tool.nativeName}>
-          <div class="truncate font-mono text-xs text-slate-500">{tool.nativeName}</div>
+          <div class="truncate font-mono text-xs text-muted-foreground">{tool.nativeName}</div>
         </div>
       ) : null}
       {columnVisible(visibleColumns, "description") ? (
-        <div class="line-clamp-2 text-sm text-slate-500" title={description}>{description}</div>
+        description.length > 120 ? (
+          <details class="text-sm text-muted-foreground">
+            <summary class="cursor-pointer line-clamp-2 hover:text-foreground">{description}</summary>
+            <p class="mt-2 leading-relaxed">{description}</p>
+          </details>
+        ) : (
+          <div class="text-sm text-muted-foreground" title={description}>{description}</div>
+        )
       ) : null}
       {columnVisible(visibleColumns, "createdAt") ? <TimestampCell value={tool.createdAt} /> : null}
       {columnVisible(visibleColumns, "updatedAt") ? <TimestampCell value={tool.updatedAt} /> : null}
@@ -3233,26 +3880,29 @@ function AuditLogCard({ entry, visibleColumns }) {
   const statusClass = entry.status === 429 ? "status-warning" : entry.status >= 400 ? "status-error" : "status-success";
   const error = entry.error || t("common.ok");
   const rawCall = entry.rawCall || "";
+  const transportVariant = entry.transport === "mcp" ? "default" : "secondary";
   return (
-    <div class="data-row" style={{ gridTemplateColumns: tableGridTemplate("auditLogs", visibleColumns) }}>
+    <div class="data-row data-row-interactive" style={{ gridTemplateColumns: tableGridTemplate("auditLogs", visibleColumns) }}>
       {columnVisible(visibleColumns, "timestamp") ? <TimestampCell value={entry.timestamp} /> : null}
-      {columnVisible(visibleColumns, "transport") ? <span class="font-mono text-xs uppercase text-slate-600">{entry.transport || t("common.notSet")}</span> : null}
-      {columnVisible(visibleColumns, "endpoint") ? <div class="truncate font-mono text-xs text-slate-600">{entry.endpointId || t("common.notSet")}</div> : null}
+      {columnVisible(visibleColumns, "transport") ? (
+        <StatusBadge variant={transportVariant} className="w-fit uppercase">{entry.transport || t("common.notSet")}</StatusBadge>
+      ) : null}
+      {columnVisible(visibleColumns, "endpoint") ? <div class="truncate font-mono text-xs text-muted-foreground">{entry.endpointId || t("common.notSet")}</div> : null}
       {columnVisible(visibleColumns, "tool") ? <div class="truncate font-mono text-xs text-primary" title={entry.toolName}>{entry.toolName || t("common.notSet")}</div> : null}
-      {columnVisible(visibleColumns, "status") ? <span class={`status-pill ${statusClass}`}>{entry.status}</span> : null}
-      {columnVisible(visibleColumns, "duration") ? <span class="text-sm text-slate-500">{formatDuration(entry.durationMs)}</span> : null}
-      {columnVisible(visibleColumns, "caller") ? <div class="truncate text-sm text-slate-600" title={entry.caller}>{entry.caller || t("common.notSet")}</div> : null}
+      {columnVisible(visibleColumns, "status") ? <StatusBadge variant={statusBadgeVariant(statusClass)}>{entry.status}</StatusBadge> : null}
+      {columnVisible(visibleColumns, "duration") ? <span class="text-sm text-muted-foreground">{formatDuration(entry.durationMs)}</span> : null}
+      {columnVisible(visibleColumns, "caller") ? <div class="truncate text-sm text-muted-foreground" title={entry.caller}>{entry.caller || t("common.notSet")}</div> : null}
       {columnVisible(visibleColumns, "error") ? (
-        <div class={`line-clamp-2 text-sm ${entry.error ? "text-error" : "text-slate-500"}`} title={error}>{error}</div>
+        <div class={`line-clamp-2 text-sm ${entry.error ? "text-destructive" : "text-muted-foreground"}`} title={error}>{error}</div>
       ) : null}
       {columnVisible(visibleColumns, "rawCall") ? (
         rawCall ? (
-          <details class="group text-xs text-slate-600">
+          <details class="group text-xs text-muted-foreground">
             <summary class="cursor-pointer font-semibold text-primary">{t("audit.showRawCall")}</summary>
-            <pre class="mt-2 max-h-48 overflow-auto rounded-lg bg-slate-950 p-3 text-[0.7rem] leading-relaxed text-slate-100">{rawCall}</pre>
+            <pre class="mt-2 max-h-48 overflow-auto rounded-lg bg-muted p-3 font-mono text-[0.7rem] leading-relaxed text-foreground">{rawCall}</pre>
           </details>
         ) : (
-          <span class="text-sm text-slate-400">{t("common.notSet")}</span>
+          <span class="text-sm text-muted-foreground">{t("common.notSet")}</span>
         )
       ) : null}
     </div>
@@ -3261,16 +3911,19 @@ function AuditLogCard({ entry, visibleColumns }) {
 
 function TimestampCell({ value }) {
   return (
-    <div class="text-xs text-slate-500" title={value || t("common.notSet")}>
+    <div class="text-xs text-muted-foreground" title={value || t("common.notSet")}>
       {formatTimestamp(value)}
     </div>
   );
 }
 
-function EmptyState({ message }) {
+function EmptyState({ message, actionLabel, onAction }) {
   return (
-    <div class="grid min-h-60 place-items-center bg-base-100/60 p-6 text-center text-slate-500">
-      {message}
+    <div class="grid min-h-48 place-items-center gap-4 bg-muted/40 p-8 text-center">
+      <p class="max-w-md text-sm text-muted-foreground">{message}</p>
+      {actionLabel && onAction ? (
+        <Button variant="default" size="sm" type="button" onClick={onAction}>{actionLabel}</Button>
+      ) : null}
     </div>
   );
 }
@@ -3278,25 +3931,33 @@ function EmptyState({ message }) {
 function SkeletonList() {
   return (
     <>
-      <div class="skeleton h-28 w-full"></div>
-      <div class="skeleton h-28 w-full"></div>
-      <div class="skeleton h-28 w-full"></div>
+      <Skeleton className="h-14 w-full" />
+      <Skeleton className="h-14 w-full" />
+      <Skeleton className="h-14 w-full" />
     </>
   );
 }
 
 function ToastStack({ toasts, onDismiss }) {
   return (
-    <div class="toast toast-top toast-end z-50">
+    <div class="fixed top-4 right-4 z-50 flex flex-col gap-2">
       {toasts.map((item) => (
-        <div key={item.id} class={`alert ${item.type === "error" ? "alert-error" : item.type === "warning" ? "alert-warning" : "alert-success"} max-w-sm items-start shadow-lg`}>
+        <div
+          key={item.id}
+          class={cn(
+            "flex max-w-sm items-start gap-3 rounded-lg border bg-card p-4 shadow-lg",
+            item.type === "error" && "border-destructive/30 bg-destructive/10 text-destructive",
+            item.type === "warning" && "border-amber-300 bg-amber-50 text-amber-900",
+            item.type === "success" && "border-emerald-300 bg-emerald-50 text-emerald-900",
+          )}
+        >
           <div class="min-w-0">
             <h3 class="font-bold">{item.title}</h3>
             {item.message ? <div class="text-sm">{item.message}</div> : null}
           </div>
-          <button class="btn btn-circle btn-ghost btn-xs" type="button" onClick={() => onDismiss(item.id)} aria-label={t("aria.dismissNotification")}>
-            {t("common.closeIcon")}
-          </button>
+          <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" type="button" onClick={() => onDismiss(item.id)} aria-label={t("aria.dismissNotification")}>
+            <X className="h-4 w-4" />
+          </Button>
         </div>
       ))}
     </div>

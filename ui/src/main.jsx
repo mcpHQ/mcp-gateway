@@ -2631,15 +2631,6 @@ function TopBar({ title, description, children }) {
   );
 }
 
-function ThemeToggle({ darkMode, onToggle }) {
-  return (
-    <button class="theme-toggle" type="button" onClick={onToggle} aria-pressed={darkMode} aria-label={t("aria.toggleDarkMode")}>
-      <span>{darkMode ? t("common.dark") : t("common.light")}</span>
-      <span class="theme-toggle-knob">{darkMode ? "D" : "L"}</span>
-    </button>
-  );
-}
-
 function ServerModal({ open, title, description, onClose, children }) {
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>

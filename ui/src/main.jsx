@@ -2557,11 +2557,11 @@ function Sidebar({ activeView, darkMode, user, onLogout, onNavigate, onToggleThe
 
   return (
     <aside class="flex w-full shrink-0 flex-col border-b border-border bg-card lg:sticky lg:top-0 lg:h-screen lg:w-56 lg:border-b-0 lg:border-r">
-      <div class="flex items-center gap-3 border-b border-border p-4">
+      <div class="flex items-start gap-3 border-b border-border p-4">
         <BrandLogo />
-        <div class="min-w-0">
-          <div class="truncate text-sm font-semibold">{t("brand.name")}</div>
-          <div class="truncate text-xs text-muted-foreground">{t("nav.project")}</div>
+        <div class="min-w-0 flex-1">
+          <div class="text-sm font-semibold leading-snug">{t("brand.name")}</div>
+          <div class="text-xs text-muted-foreground">{t("nav.project")}</div>
         </div>
       </div>
       <nav class="flex flex-1 flex-col gap-0.5 p-2">

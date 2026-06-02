@@ -1,0 +1,6 @@
+services:
+  go:
+    image: mcphq-mcp-gateway:latest
+    ports:
+      - "8080:8080"
+    

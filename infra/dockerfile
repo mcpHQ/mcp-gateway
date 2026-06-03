@@ -1,13 +1,9 @@
 FROM golang:latest
 
 WORKDIR /app
-COPY . .
+COPY ../* .
 
 EXPOSE 8080
-
-ENV MCP_GATEWAY_ADMIN_EMAIL=admin@example.com
-ENV MCP_GATEWAY_ADMIN_PASSWORD=password123
-ENV MCP_GATEWAY_JWT_SECRET=mysecret
 
 CMD go run . \
     -addr :8080 \

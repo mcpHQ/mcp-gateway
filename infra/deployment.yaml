@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-app-deployment
+spec:
+  replicas: 
+    valueFrom:
+      configMapKeyRef:
+        name: mcp-app-config
+        key: replicas
+  selector:
+    matchLabels:
+      app: mcp-app
+  template:
+    metadata:
+      labels:
+        app: mcp-app
+    spec:
+      containers:
+      - name: mcp-gateway-container
+        image: deepcan/mcp-gateway-test:latest
+        ports:
+        - containerPort: 
+          valueFrom:
+            configMapKeyRef:
+              name: mcp-app-config
+              key: port 
+        env:
+        - name: MCP_GATEWAY_ADMIN_EMAIL
+          valueFrom:
+            secretKeyRef:
+              name: mcp-app-secret
+              key: MCP_GATEWAY_ADMIN_EMAIL
+        - name: MCP_GATEWAY_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mcp-app-secret
+              key: MCP_GATEWAY_ADMIN_PASSWORD
+        - name: MCP_GATEWAY_JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: mcp-app-secret
+              key: MCP_GATEWAY_JWT_SECRET

@@ -1,0 +1,13 @@
+services:
+  mcp-app:
+    build:
+      context: .
+      dockerfile: dockerfile
+      args:
+        - MCP_GATEWAY_ADMIN_EMAIL=value
+        - MCP_GATEWAY_ADMIN_PASSWORD=value
+        - MCP_GATEWAY_JWT_SECRET=value
+    image: mcp-app-container:latest
+    ports:
+      - "8080:8080"
+    

@@ -1,0 +1,11 @@
+CREATE TABLE IF NOT EXISTS api_keys (
+	id TEXT PRIMARY KEY,
+	name TEXT NOT NULL,
+	value TEXT NOT NULL,
+	endpoint_ids_json TEXT NOT NULL DEFAULT '[]',
+	enabled INTEGER NOT NULL DEFAULT 1,
+	created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_enabled ON api_keys(enabled);

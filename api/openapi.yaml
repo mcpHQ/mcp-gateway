@@ -1,0 +1,1166 @@
+openapi: 3.0.3
+info:
+  title: MCP Gateway API
+  version: 0.1.0
+  description: REST admin API and MCP JSON-RPC HTTP endpoints for MCP Gateway.
+servers:
+  - url: http://localhost:8080
+security:
+  - bearerAuth: []
+paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      summary: Check service health
+      security: []
+      responses:
+        "200":
+          description: Gateway is healthy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /api/auth/login:
+    post:
+      operationId: login
+      summary: Authenticate an admin user
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Authenticated session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSessionResponse"
+        "401":
+          $ref: "#/components/responses/RestError"
+  /api/auth/me:
+    get:
+      operationId: getCurrentUser
+      summary: Get the authenticated user
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeResponse"
+        "401":
+          $ref: "#/components/responses/RestError"
+  /api/auth/password:
+    post:
+      operationId: changePassword
+      summary: Change the authenticated user's password
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangePasswordRequest"
+      responses:
+        "200":
+          description: Password changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OKResponse"
+        "400":
+          $ref: "#/components/responses/RestError"
+        "401":
+          $ref: "#/components/responses/RestError"
+  /api/config:
+    get:
+      operationId: getConfig
+      summary: Get runtime configuration metadata
+      responses:
+        "200":
+          description: Configuration metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigResponse"
+  /api/servers:
+    get:
+      operationId: listServers
+      summary: List upstream MCP servers
+      responses:
+        "200":
+          description: Server list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServersResponse"
+    post:
+      operationId: upsertServer
+      summary: Create or update an upstream MCP server
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Server"
+      responses:
+        "200":
+          description: Updated server list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServersResponse"
+        "400":
+          $ref: "#/components/responses/RestError"
+  /api/servers/test:
+    post:
+      operationId: testServer
+      summary: Test an upstream MCP server configuration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Server"
+      responses:
+        "200":
+          description: Server test succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestServerResponse"
+        "502":
+          description: Server test failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestServerErrorResponse"
+  /api/servers/{id}:
+    delete:
+      operationId: deleteServer
+      summary: Delete an upstream MCP server
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Updated server list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServersResponse"
+        "404":
+          $ref: "#/components/responses/RestError"
+  /api/servers/{id}/enable:
+    post:
+      operationId: enableServer
+      summary: Enable an upstream MCP server
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Updated server list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServersResponse"
+        "400":
+          $ref: "#/components/responses/RestError"
+        "404":
+          $ref: "#/components/responses/RestError"
+  /api/servers/{id}/disable:
+    post:
+      operationId: disableServer
+      summary: Disable an upstream MCP server
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Updated server list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServersResponse"
+        "400":
+          $ref: "#/components/responses/RestError"
+        "404":
+          $ref: "#/components/responses/RestError"
+  /api/servers/{id}/restart:
+    post:
+      operationId: restartServer
+      summary: Restart an upstream MCP server
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Updated server list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServersResponse"
+        "400":
+          $ref: "#/components/responses/RestError"
+  /api/servers/{id}/test:
+    post:
+      operationId: testStoredServer
+      summary: Test a stored upstream MCP server
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Server test succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestServerResponse"
+        "400":
+          description: Server test failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestServerErrorResponse"
+        "404":
+          description: Stored server was not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestServerErrorResponse"
+  /api/servers/{id}/tools/refresh:
+    post:
+      operationId: refreshServerTools
+      summary: Refresh cached tools for one upstream MCP server
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Refreshed tool list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolsResponse"
+        "400":
+          $ref: "#/components/responses/RestError"
+        "404":
+          $ref: "#/components/responses/RestError"
+  /api/endpoints:
+    get:
+      operationId: listEndpoints
+      summary: List scoped MCP endpoints
+      responses:
+        "200":
+          description: Endpoint list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EndpointsResponse"
+    post:
+      operationId: upsertEndpoint
+      summary: Create or update a scoped MCP endpoint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Endpoint"
+      responses:
+        "200":
+          description: Updated endpoint list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EndpointsResponse"
+        "400":
+          $ref: "#/components/responses/RestError"
+        "404":
+          $ref: "#/components/responses/RestError"
+  /api/endpoints/{id}:
+    delete:
+      operationId: deleteEndpoint
+      summary: Delete a scoped MCP endpoint
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Updated endpoint list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EndpointsResponse"
+        "404":
+          $ref: "#/components/responses/RestError"
+  /api/endpoints/{id}/enable:
+    post:
+      operationId: enableEndpoint
+      summary: Enable a scoped MCP endpoint
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Updated endpoint list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EndpointsResponse"
+        "400":
+          $ref: "#/components/responses/RestError"
+        "404":
+          $ref: "#/components/responses/RestError"
+  /api/endpoints/{id}/disable:
+    post:
+      operationId: disableEndpoint
+      summary: Disable a scoped MCP endpoint
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Updated endpoint list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EndpointsResponse"
+        "400":
+          $ref: "#/components/responses/RestError"
+        "404":
+          $ref: "#/components/responses/RestError"
+  /api/endpoints/{id}/curl:
+    get:
+      operationId: getEndpointCurlOptions
+      summary: Get API key values for endpoint cURL copy snippets
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: API keys that can be used to call this endpoint.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EndpointCurlOptionsResponse"
+        "404":
+          $ref: "#/components/responses/RestError"
+  /api/endpoints/{id}/tools:
+    get:
+      operationId: listEndpointTools
+      summary: List tools exposed by a scoped MCP endpoint
+      security:
+        - clientApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Endpoint tool list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolsResponse"
+        "400":
+          $ref: "#/components/responses/RestError"
+        "404":
+          $ref: "#/components/responses/RestError"
+  /api/endpoints/{id}/tools/{name}/call:
+    post:
+      operationId: callEndpointTool
+      summary: Call a tool through a scoped MCP endpoint
+      security:
+        - clientApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - $ref: "#/components/parameters/ToolName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CallToolRequest"
+      responses:
+        "200":
+          description: MCP tool call result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallToolResult"
+        "400":
+          $ref: "#/components/responses/RestError"
+        "404":
+          $ref: "#/components/responses/RestError"
+        "429":
+          $ref: "#/components/responses/RestError"
+        "502":
+          $ref: "#/components/responses/RestError"
+  /api/api-keys:
+    get:
+      operationId: listAPIKeys
+      summary: List API keys with secret values redacted
+      responses:
+        "200":
+          description: API key list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIKeysResponse"
+    post:
+      operationId: upsertAPIKey
+      summary: Create or update an API key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/APIKey"
+      responses:
+        "200":
+          description: Updated API key list with secret values redacted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIKeysResponse"
+        "400":
+          $ref: "#/components/responses/RestError"
+        "404":
+          $ref: "#/components/responses/RestError"
+  /api/api-keys/{id}:
+    delete:
+      operationId: deleteAPIKey
+      summary: Delete an API key
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Updated API key list with secret values redacted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIKeysResponse"
+        "404":
+          $ref: "#/components/responses/RestError"
+  /api/tools:
+    get:
+      operationId: listTools
+      summary: List cached upstream tools
+      responses:
+        "200":
+          description: Cached upstream tool list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolsResponse"
+        "502":
+          $ref: "#/components/responses/RestError"
+  /api/tools/refresh:
+    post:
+      operationId: refreshTools
+      summary: Refresh cached tools across upstream MCP servers
+      responses:
+        "200":
+          description: Refreshed tool list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolsResponse"
+        "502":
+          description: Tool refresh partially or fully failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolsErrorResponse"
+  /api/tools/{name}/call:
+    post:
+      operationId: callGlobalTool
+      summary: Deprecated global REST tool call route
+      description: This route intentionally returns 410 because tool calls must use a scoped endpoint route.
+      parameters:
+        - $ref: "#/components/parameters/ToolName"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CallToolRequest"
+      responses:
+        "410":
+          $ref: "#/components/responses/RestError"
+  /api/audit-logs:
+    get:
+      operationId: listAuditLogs
+      summary: List recent audit log entries
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        "200":
+          description: Recent audit log entries.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditLogsResponse"
+        "400":
+          $ref: "#/components/responses/RestError"
+  /mcp:
+    post:
+      operationId: mcpGlobal
+      summary: MCP JSON-RPC endpoint without endpoint-scoped tool calls
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JsonRpcRequest"
+      responses:
+        "200":
+          description: JSON-RPC response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JsonRpcResponse"
+        "202":
+          description: JSON-RPC notification accepted.
+        "400":
+          description: JSON-RPC parse error response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JsonRpcResponse"
+  /mcp/{endpointId}:
+    post:
+      operationId: mcpEndpoint
+      summary: Endpoint-scoped MCP JSON-RPC endpoint
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/EndpointID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JsonRpcRequest"
+      responses:
+        "200":
+          description: JSON-RPC response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JsonRpcResponse"
+        "202":
+          description: JSON-RPC notification accepted.
+        "400":
+          description: JSON-RPC parse error response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JsonRpcResponse"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    clientApiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+  parameters:
+    ID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    EndpointID:
+      name: endpointId
+      in: path
+      required: true
+      schema:
+        type: string
+    ToolName:
+      name: name
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    RestError:
+      description: REST error response.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+  schemas:
+    APIKey:
+      type: object
+      required:
+        - id
+        - name
+        - value
+        - endpointIds
+        - enabled
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        value:
+          type: string
+          description: Secret API key value. Returned only on write requests, never in list responses.
+        endpointIds:
+          type: array
+          items:
+            type: string
+        enabled:
+          type: boolean
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+    APIKeyStatus:
+      type: object
+      required:
+        - id
+        - name
+        - endpointIds
+        - enabled
+        - hasValue
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        endpointIds:
+          type: array
+          items:
+            type: string
+        enabled:
+          type: boolean
+        hasValue:
+          type: boolean
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+    APIKeysResponse:
+      type: object
+      required:
+        - apiKeys
+      properties:
+        apiKeys:
+          type: array
+          items:
+            $ref: "#/components/schemas/APIKeyStatus"
+    EndpointCurlAPIKey:
+      type: object
+      required:
+        - id
+        - name
+        - value
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        value:
+          type: string
+          description: Secret API key value for the selected endpoint cURL snippet.
+    EndpointCurlOptionsResponse:
+      type: object
+      required:
+        - apiKeys
+      properties:
+        apiKeys:
+          type: array
+          items:
+            $ref: "#/components/schemas/EndpointCurlAPIKey"
+    AuditLog:
+      type: object
+      required:
+        - id
+        - timestamp
+        - transport
+        - status
+        - durationMs
+      properties:
+        id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        transport:
+          type: string
+          enum:
+            - rest
+            - mcp
+        endpointId:
+          type: string
+        toolName:
+          type: string
+        status:
+          type: integer
+        durationMs:
+          type: integer
+          format: int64
+        caller:
+          type: string
+        error:
+          type: string
+        rawCall:
+          type: string
+          description: Raw JSON-RPC tools/call payload sent to the upstream MCP server.
+    AuditLogsResponse:
+      type: object
+      required:
+        - auditLogs
+      properties:
+        auditLogs:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditLog"
+    AuthSessionResponse:
+      type: object
+      required:
+        - token
+        - user
+      properties:
+        token:
+          type: string
+        user:
+          $ref: "#/components/schemas/User"
+    AuthConfig:
+      type: object
+      properties:
+        type:
+          type: string
+          enum:
+            - none
+            - apiKey
+            - bearer
+            - jwtBearer
+            - basic
+        apiKeyName:
+          type: string
+        apiKeyValue:
+          type: string
+        apiKeyIn:
+          type: string
+          enum:
+            - header
+            - query
+        token:
+          type: string
+        username:
+          type: string
+        password:
+          type: string
+    CallToolRequest:
+      type: object
+      properties:
+        arguments:
+          type: object
+          additionalProperties: true
+    CallToolResult:
+      type: object
+      properties:
+        content:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        isError:
+          type: boolean
+    ConfigResponse:
+      type: object
+      required:
+        - path
+      properties:
+        path:
+          type: string
+    ChangePasswordRequest:
+      type: object
+      required:
+        - currentPassword
+        - newPassword
+      properties:
+        currentPassword:
+          type: string
+        newPassword:
+          type: string
+    Endpoint:
+      type: object
+      required:
+        - id
+        - name
+        - serverIds
+        - enabled
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        serverIds:
+          type: array
+          items:
+            type: string
+        rateLimit:
+          $ref: "#/components/schemas/RateLimit"
+        enabled:
+          type: boolean
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+    EndpointStatus:
+      allOf:
+        - $ref: "#/components/schemas/Endpoint"
+        - type: object
+          required:
+            - usage
+          properties:
+            usage:
+              $ref: "#/components/schemas/UsageSnapshot"
+    EndpointsResponse:
+      type: object
+      required:
+        - endpoints
+      properties:
+        endpoints:
+          type: array
+          items:
+            $ref: "#/components/schemas/EndpointStatus"
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+    HealthResponse:
+      type: object
+      required:
+        - ok
+        - timestamp
+      properties:
+        ok:
+          type: boolean
+        timestamp:
+          type: string
+          format: date-time
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+    MeResponse:
+      type: object
+      required:
+        - user
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+    OKResponse:
+      type: object
+      required:
+        - ok
+      properties:
+        ok:
+          type: boolean
+    InitializeResult:
+      type: object
+      required:
+        - protocolVersion
+        - capabilities
+        - serverInfo
+      properties:
+        protocolVersion:
+          type: string
+        capabilities:
+          type: object
+          additionalProperties: true
+        serverInfo:
+          type: object
+          required:
+            - name
+            - version
+          properties:
+            name:
+              type: string
+            version:
+              type: string
+    JsonRpcError:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+    JsonRpcID:
+      nullable: true
+      oneOf:
+        - type: string
+        - type: integer
+        - type: number
+    JsonRpcRequest:
+      type: object
+      required:
+        - jsonrpc
+        - method
+      properties:
+        jsonrpc:
+          type: string
+          enum:
+            - "2.0"
+        id:
+          $ref: "#/components/schemas/JsonRpcID"
+        method:
+          type: string
+          enum:
+            - initialize
+            - notifications/initialized
+            - tools/list
+            - tools/call
+        params:
+          type: object
+          additionalProperties: true
+    JsonRpcResponse:
+      type: object
+      required:
+        - jsonrpc
+      properties:
+        jsonrpc:
+          type: string
+          enum:
+            - "2.0"
+        id:
+          $ref: "#/components/schemas/JsonRpcID"
+        result:
+          type: object
+          additionalProperties: true
+        error:
+          $ref: "#/components/schemas/JsonRpcError"
+    RateLimit:
+      type: object
+      properties:
+        requestsPerMinute:
+          type: integer
+    Server:
+      type: object
+      required:
+        - id
+        - name
+        - enabled
+        - weight
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        transport:
+          type: string
+          enum:
+            - http
+            - sse
+            - stdio
+        url:
+          type: string
+        auth:
+          $ref: "#/components/schemas/AuthConfig"
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+        command:
+          type: string
+        args:
+          type: array
+          items:
+            type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        enabled:
+          type: boolean
+        weight:
+          type: integer
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+    ServerStatus:
+      allOf:
+        - $ref: "#/components/schemas/Server"
+        - type: object
+          required:
+            - status
+            - usage
+          properties:
+            status:
+              $ref: "#/components/schemas/Status"
+            usage:
+              $ref: "#/components/schemas/UsageSnapshot"
+    ServersResponse:
+      type: object
+      required:
+        - servers
+      properties:
+        servers:
+          type: array
+          items:
+            $ref: "#/components/schemas/ServerStatus"
+    Status:
+      type: object
+      required:
+        - running
+      properties:
+        running:
+          type: boolean
+        error:
+          type: string
+    TestResult:
+      type: object
+      required:
+        - ok
+        - status
+        - toolCount
+      properties:
+        ok:
+          type: boolean
+        status:
+          type: string
+        toolCount:
+          type: integer
+        tools:
+          type: array
+          items:
+            type: string
+    TestServerResponse:
+      type: object
+      required:
+        - result
+      properties:
+        result:
+          $ref: "#/components/schemas/TestResult"
+    TestServerErrorResponse:
+      type: object
+      required:
+        - result
+        - error
+      properties:
+        result:
+          $ref: "#/components/schemas/TestResult"
+        error:
+          type: string
+    Tool:
+      type: object
+      required:
+        - name
+        - serverId
+        - serverName
+        - nativeName
+      properties:
+        name:
+          type: string
+        serverId:
+          type: string
+        serverName:
+          type: string
+        nativeName:
+          type: string
+        description:
+          type: string
+        inputSchema:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+    ToolsResponse:
+      type: object
+      required:
+        - tools
+      properties:
+        tools:
+          type: array
+          items:
+            $ref: "#/components/schemas/Tool"
+    User:
+      type: object
+      required:
+        - id
+        - email
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+          format: email
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+    ToolsErrorResponse:
+      type: object
+      required:
+        - tools
+        - error
+      properties:
+        tools:
+          type: array
+          items:
+            $ref: "#/components/schemas/Tool"
+        error:
+          type: string
+    UsageSnapshot:
+      type: object
+      required:
+        - totalCalls
+        - successfulCalls
+        - failedCalls
+        - rateLimitedCalls
+        - currentWindowCalls
+        - limitPerMinute
+        - remainingThisMinute
+      properties:
+        totalCalls:
+          type: integer
+          format: int64
+        successfulCalls:
+          type: integer
+          format: int64
+        failedCalls:
+          type: integer
+          format: int64
+        rateLimitedCalls:
+          type: integer
+          format: int64
+        currentWindowCalls:
+          type: integer
+        limitPerMinute:
+          type: integer
+        remainingThisMinute:
+          type: integer
+        windowResetAt:
+          type: string
+        lastCalledAt:
+          type: string
+        lastError:
+          type: string

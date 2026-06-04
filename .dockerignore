@@ -1,0 +1,9 @@
+.git
+.gitignore
+mcp-gateway.db
+mcp-gateway.db-*
+node_modules
+ui/dist
+README.md
+DEVELOPMENT.md
+Makefile

@@ -1,7 +1,0 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: mcp-app-config
-data:
-  port: "80"
-  replicas: "3"

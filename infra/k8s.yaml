@@ -1,13 +1,46 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-app-config
+data:
+  port: "8080"
+
+---
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mcp-app-secret
+type: Opaque
+stringData:
+  MCP_GATEWAY_ADMIN_EMAIL: admin@gmail.com 
+  MCP_GATEWAY_ADMIN_PASSWORD: cHJvZA== 
+  MCP_GATEWAY_JWT_SECRET: cHJvZA==
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-app-service
+spec:
+  selector:
+    app: mcp-app
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+      nodePort: 30000
+  type: NodePort
+
+---
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mcp-app-deployment
 spec:
-  replicas: 
-    valueFrom:
-      configMapKeyRef:
-        name: mcp-app-config
-        key: replicas
+  replicas: 3
   selector:
     matchLabels:
       app: mcp-app
@@ -20,11 +53,7 @@ spec:
       - name: mcp-gateway-container
         image: deepcan/mcp-gateway-test:latest
         ports:
-        - containerPort: 
-          valueFrom:
-            configMapKeyRef:
-              name: mcp-app-config
-              key: port 
+        - containerPort: 8080
         env:
         - name: MCP_GATEWAY_ADMIN_EMAIL
           valueFrom:

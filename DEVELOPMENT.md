@@ -86,6 +86,14 @@ Change the admin password from the UI after first login.
 
 ## Docker
 
+### Published images
+
+Images are built and pushed to GitHub Container Registry by the [`docker` workflow](.github/workflows/docker.yml):
+
+- Pushes to `main` publish `ghcr.io/mcphq/mcp-gateway:latest` (plus `main` and `sha-<commit>` tags).
+- Version tags like `v1.2.3` publish `1.2.3`, `1.2`, and `1` tags.
+- Pull requests build the image (both `linux/amd64` and `linux/arm64`) without pushing.
+
 ### Build
 
 ```bash
@@ -97,7 +105,7 @@ docker build -t mcp-gateway .
 Published image:
 
 ```bash
-docker run --rm -p 8080:8080 -v mcp-gateway-data:/data ghcr.io/mcpHQ/mcp-gateway
+docker run --rm -p 8080:8080 -v mcp-gateway-data:/data ghcr.io/mcphq/mcp-gateway
 ```
 
 Local build:
@@ -118,6 +126,15 @@ docker run --rm -p 8080:8080 \
 ```
 
 Stdio upstream servers (for example `npx @modelcontextprotocol/server-filesystem`) are not available in the minimal Alpine image. Use a custom image or run the gateway on the host when you need local stdio MCP processes.
+
+## Kubernetes
+
+Two deployment options ship with the repository:
+
+- **Helm chart** in [`charts/mcp-gateway`](charts/mcp-gateway/README.md) — configurable image, persistence, ingress, secrets, probes, and upstream env interpolation.
+- **Plain manifests** in [`deploy/kubernetes`](deploy/kubernetes/README.md) — `kubectl apply -k deploy/kubernetes` with a namespace, Secret, PVC, Deployment, Service, and optional Ingress.
+
+Both run a single replica with a `ReadWriteOnce` volume because state lives in an embedded SQLite database (see [Operational notes](#operational-notes)).
 
 ## Configure a server
 

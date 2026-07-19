@@ -19,8 +19,8 @@ logs/
 tmp/
 temp/
 
-# Go test/build artifacts
-mcp-gateway
+# Go test/build artifacts (root-anchored so charts/mcp-gateway stays tracked)
+/mcp-gateway
 *.test
 *.out
 coverage.out

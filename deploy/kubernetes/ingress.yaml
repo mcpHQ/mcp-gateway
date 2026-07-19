@@ -1,0 +1,29 @@
+# Optional: expose the gateway through an Ingress controller.
+# Adjust the host, ingressClassName, and TLS configuration, then include
+# this file in kustomization.yaml.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mcp-gateway
+  namespace: mcp-gateway
+  labels:
+    app.kubernetes.io/name: mcp-gateway
+  # annotations:
+  #   cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: mcp-gateway.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mcp-gateway
+                port:
+                  name: http
+  # tls:
+  #   - secretName: mcp-gateway-tls
+  #     hosts:
+  #       - mcp-gateway.example.com

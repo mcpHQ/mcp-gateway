@@ -1,0 +1,24 @@
+apiVersion: v2
+name: mcp-gateway
+description: An open source control plane for Model Context Protocol (MCP) servers. Connect HTTP and stdio MCP servers, discover tools, group them into scoped endpoints, and manage secrets, rate limits, API keys, and usage from one lightweight Go service with a built-in web UI.
+type: application
+version: 0.1.0
+appVersion: "latest"
+kubeVersion: ">=1.23.0-0"
+home: https://github.com/mcpHQ/mcp-gateway
+icon: https://raw.githubusercontent.com/mcpHQ/mcp-gateway/main/docs/dashboard-overview.png
+sources:
+  - https://github.com/mcpHQ/mcp-gateway
+keywords:
+  - mcp
+  - model-context-protocol
+  - gateway
+  - ai
+  - tools
+  - llm
+maintainers:
+  - name: mcpHQ
+    url: https://github.com/mcpHQ
+annotations:
+  artifacthub.io/license: MIT
+  artifacthub.io/category: ai-machine-learning

@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-gateway
+  namespace: mcp-gateway
+  labels:
+    app.kubernetes.io/name: mcp-gateway
+spec:
+  # MCP Gateway uses an embedded SQLite database; run a single replica
+  # against a ReadWriteOnce volume.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mcp-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mcp-gateway
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mcp-gateway
+          image: ghcr.io/mcphq/mcp-gateway:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - -addr
+            - ":8080"
+            - -db
+            - /data/mcp-gateway.db
+          env:
+            - name: MCP_GATEWAY_ADMIN_EMAIL
+              value: admin@mcphq.org
+            - name: MCP_GATEWAY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-gateway
+                  key: admin-password
+                  optional: true
+            - name: MCP_GATEWAY_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-gateway
+                  key: jwt-secret
+                  optional: true
+            # Add env vars referenced by upstream server configs here,
+            # e.g. ${GITHUB_TOKEN} used in a server's bearer auth:
+            # - name: GITHUB_TOKEN
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: github-credentials
+            #       key: token
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mcp-gateway-data

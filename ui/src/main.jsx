@@ -388,7 +388,12 @@ function commandPreviewText(form) {
 
 function splitCommandLine(value) {
   const matches = String(value || "").match(/"[^"]*"|'[^']*'|\S+/g) || [];
-  return matches.map((token) => token.replace(/^['"]|['"]$/g, ""));
+  return matches.map((token) => {
+    if ((token.startsWith('"') && token.endsWith('"')) || (token.startsWith("'") && token.endsWith("'"))) {
+      return token.slice(1, -1);
+    }
+    return token;
+  });
 }
 
 function isHarnessHostedURL(url) {

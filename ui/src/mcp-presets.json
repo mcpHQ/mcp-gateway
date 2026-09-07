@@ -41,6 +41,29 @@
     }
   },
   {
+    "id": "harness-stdio",
+    "labelKey": "preset.harnessStdio.label",
+    "descriptionKey": "preset.harnessStdio.description",
+    "serverNameKey": "preset.harnessStdio.serverName",
+    "server": {
+      "id": "harness",
+      "name": "",
+      "transport": "stdio",
+      "url": "",
+      "auth": {
+        "type": "none"
+      },
+      "headers": {},
+      "command": "npx",
+      "args": ["-y", "harness-mcp-v2@latest"],
+      "env": {
+        "HARNESS_API_KEY": ""
+      },
+      "weight": 1,
+      "enabled": true
+    }
+  },
+  {
     "id": "filesystem-stdio",
     "labelKey": "preset.filesystemStdio.label",
     "descriptionKey": "preset.filesystemStdio.description",

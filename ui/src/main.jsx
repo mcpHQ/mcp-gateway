@@ -2635,7 +2635,7 @@ function ServerModal({ open, title, description, onClose, children }) {
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
       <DialogContent className="max-w-6xl gap-0 overflow-hidden p-0" onInteractOutside={(event) => event.preventDefault()}>
-        <div class="sticky top-0 z-10 flex items-start justify-between gap-4 border-b bg-background/95 px-6 py-5 backdrop-blur">
+        <div class="sticky top-0 z-10 flex shrink-0 items-start justify-between gap-4 border-b bg-background/95 px-6 py-5 backdrop-blur">
           <DialogHeader className="text-left">
             <DialogTitle>{title}</DialogTitle>
             <DialogDescription>{description}</DialogDescription>
@@ -2644,7 +2644,7 @@ function ServerModal({ open, title, description, onClose, children }) {
             <X className="h-4 w-4" />
           </Button>
         </div>
-        {children}
+        <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">{children}</div>
       </DialogContent>
     </Dialog>
   );

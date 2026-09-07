@@ -83,9 +83,16 @@ const initialForm = {
   headers: [{ key: "", value: "", enabled: true }],
   command: "",
   args: [],
+  env: [{ key: "", value: "", enabled: true }],
   weight: 1,
   enabled: true,
 };
+
+const stdioDefaultCommand = "npx";
+const stdioDefaultArgs = ["-y", ""];
+const commonAPIKeyHeaderNames = ["x-api-key", "x-harness-api-key", "Authorization"];
+const secretEnvKeyPattern = /token|key|secret|password/i;
+const harnessHostedHostname = "mcp.harness.io";
 
 const initialEndpointForm = {
   id: "",
@@ -364,6 +371,34 @@ function cleanArgs(args = []) {
   return args.map((arg) => String(arg).trim()).filter(Boolean);
 }
 
+function envRowsFromEnv(env = {}) {
+  const rows = Object.entries(env || {}).map(([key, value]) => ({ key, value: String(value), enabled: true }));
+  return rows.length ? rows : [{ key: "", value: "", enabled: true }];
+}
+
+function isSecretEnvKey(key = "") {
+  return secretEnvKeyPattern.test(key);
+}
+
+function commandPreviewText(form) {
+  const command = form.command.trim();
+  if (!command) return "";
+  return [command, ...cleanArgs(form.args)].join(" ");
+}
+
+function splitCommandLine(value) {
+  const matches = String(value || "").match(/"[^"]*"|'[^']*'|\S+/g) || [];
+  return matches.map((token) => token.replace(/^['"]|['"]$/g, ""));
+}
+
+function isHarnessHostedURL(url) {
+  try {
+    return new URL(url).hostname.toLowerCase() === harnessHostedHostname;
+  } catch {
+    return false;
+  }
+}
+
 function argsEqual(left = [], right = []) {
   const leftArgs = cleanArgs(left);
   const rightArgs = cleanArgs(right);
@@ -434,6 +469,19 @@ function buildHeaders(form) {
   return headers;
 }
 
+function buildEnv(form) {
+  const env = {};
+  for (const row of form.env) {
+    const key = row.key.trim();
+    const value = row.value.trim();
+    if (!row.enabled || (!key && !value)) continue;
+    if (!key) throw new Error(t("error.envKeyRequired"));
+    env[key] = value;
+  }
+
+  return env;
+}
+
 function buildAuth(form) {
   switch (form.authType) {
     case "none":
@@ -482,6 +530,7 @@ function serverPayloadFromForm(form) {
     headers: isHTTP ? buildHeaders(form) : {},
     command: isHTTP ? "" : form.command.trim(),
     args: isHTTP ? [] : cleanArgs(form.args),
+    env: isHTTP ? {} : buildEnv(form),
     enabled: form.enabled,
     weight: Number(form.weight || 1),
   };
@@ -775,6 +824,7 @@ function formFromPreset(preset) {
     headers: headerRowsFromHeaders(server.headers),
     command: server.command || "",
     args: argsFromServer(server),
+    env: envRowsFromEnv(server.env),
     weight: server.weight || 1,
     enabled: Boolean(server.enabled),
   };
@@ -858,6 +908,7 @@ function App() {
   const [savingAPIKey, setSavingAPIKey] = useState(false);
   const [testingServer, setTestingServer] = useState(false);
   const [testingServerId, setTestingServerId] = useState("");
+  const [serverTestResult, setServerTestResult] = useState(null);
   const [pendingApiRequests, setPendingApiRequests] = useState(0);
   const [toasts, setToasts] = useState([]);
   const [serverModalOpen, setServerModalOpen] = useState(false);
@@ -1303,10 +1354,20 @@ function App() {
         let nextPresetId = current.presetId;
         if (value === "stdio" && current.presetId === "custom-http") nextPresetId = customStdioPresetId;
         if (value === "http" && (current.presetId === customStdioPresetId || current.presetId === existingConfigPresetId)) nextPresetId = "custom-http";
+        if (value === "stdio" && !current.command.trim()) {
+          return {
+            ...current,
+            presetId: nextPresetId,
+            transport: value,
+            command: stdioDefaultCommand,
+            args: current.args.length ? current.args : [...stdioDefaultArgs],
+          };
+        }
         return { ...current, presetId: nextPresetId, [name]: value };
       }
       return { ...current, [name]: value };
     });
+    setServerTestResult(null);
   }
 
   function updateEndpointForm(name, value) {
@@ -1387,11 +1448,33 @@ function App() {
     }));
   }
 
+  function updateEnv(index, key, value) {
+    setForm((current) => ({
+      ...current,
+      env: current.env.map((row, i) => (i === index ? { ...row, [key]: value } : row)),
+    }));
+  }
+
+  function addEnv() {
+    setForm((current) => ({
+      ...current,
+      env: [...current.env, { key: "", value: "", enabled: true }],
+    }));
+  }
+
+  function removeEnv(index) {
+    setForm((current) => ({
+      ...current,
+      env: current.env.length === 1 ? [{ key: "", value: "", enabled: true }] : current.env.filter((_, i) => i !== index),
+    }));
+  }
+
   function selectPreset(presetId) {
     const preset = presets.find((item) => item.id === presetId);
     if (!preset) return;
     setServerIdTouched(true);
     setForm(formFromPreset(preset));
+    setServerTestResult(null);
     notify(t("toast.presetLoaded"), presetDescription(preset), "warning");
   }
 
@@ -1399,7 +1482,14 @@ function App() {
     const transport = preferences.defaultTransport;
     setServerIdTouched(false);
     setEditingServer(false);
-    setForm({ ...initialForm, presetId: transport === "stdio" ? customStdioPresetId : "custom-http", transport });
+    setServerTestResult(null);
+    setForm({
+      ...initialForm,
+      presetId: transport === "stdio" ? customStdioPresetId : "custom-http",
+      transport,
+      command: transport === "stdio" ? stdioDefaultCommand : "",
+      args: transport === "stdio" ? [...stdioDefaultArgs] : [],
+    });
     navigate("servers");
     setServerModalOpen(true);
   }
@@ -1511,6 +1601,7 @@ function App() {
     const auth = authFromServer(server);
     setServerIdTouched(true);
     setEditingServer(true);
+    setServerTestResult(null);
     setForm({
       presetId: presetIdForServer(server),
       id: server.id || "",
@@ -1527,6 +1618,7 @@ function App() {
       headers: headerRowsFromHeaders(server.headers),
       command: server.command || "",
       args: argsFromServer(server),
+      env: envRowsFromEnv(server.env),
       weight: server.weight || 1,
       enabled: Boolean(server.enabled),
     });
@@ -1582,14 +1674,18 @@ function App() {
 
   async function testServerForm() {
     setTestingServer(true);
+    setServerTestResult(null);
     try {
       const payload = serverPayloadFromForm(form);
       const response = await request("/api/servers/test", {
         method: "POST",
         body: JSON.stringify(payload),
       });
-      notify(t("toast.serverTestPassed"), testSuccessMessage(response.result));
+      const message = testSuccessMessage(response.result);
+      setServerTestResult({ status: "success", message });
+      notify(t("toast.serverTestPassed"), message);
     } catch (error) {
+      setServerTestResult({ status: "error", message: error.message });
       notify(t("toast.serverTestFailed"), error.message, "error");
     } finally {
       setTestingServer(false);
@@ -1609,6 +1705,7 @@ function App() {
       setToolsLoaded(false);
       setServerIdTouched(false);
       setEditingServer(false);
+      setServerTestResult(null);
       setForm(initialForm);
       notify(t("toast.serverSaved"), t("toast.savedMessage", { name: payload.name }));
       setServerModalOpen(false);
@@ -2367,17 +2464,22 @@ function App() {
         open={serverModalOpen}
         title={editingServer ? t("modal.updateServer") : t("modal.createServer")}
         description={t("modal.serverDescription")}
-        onClose={() => setServerModalOpen(false)}
+        onClose={() => {
+          setServerModalOpen(false);
+          setServerTestResult(null);
+        }}
       >
         <ServerForm
           form={form}
           saving={saving}
           testing={testingServer}
+          testResult={serverTestResult}
           onSubmit={saveServer}
           onTest={testServerForm}
           onClear={() => {
             setServerIdTouched(false);
             setEditingServer(false);
+            setServerTestResult(null);
             setForm(initialForm);
           }}
           onPreset={selectPreset}
@@ -2388,6 +2490,9 @@ function App() {
           onHeaderChange={updateHeader}
           onAddHeader={addHeader}
           onRemoveHeader={removeHeader}
+          onEnvChange={updateEnv}
+          onAddEnv={addEnv}
+          onRemoveEnv={removeEnv}
         />
       </ServerModal>
       <ServerModal
@@ -2718,8 +2823,18 @@ function CurlCopyModal({ endpoint, apiKeys, exampleTool, loading, onCopy }) {
   );
 }
 
-function ArgList({ args, onChange, onAdd, onRemove }) {
+function ArgList({ args, command, onChange, onAdd, onRemove }) {
   const rows = args.length ? args : [""];
+  const isNpx = (command || "").trim() === "npx";
+
+  function placeholderFor(index) {
+    if (isNpx) {
+      if (index === 0) return "-y";
+      if (index === 1) return t("server.placeholderArgPackage");
+    }
+    return index === 0 ? t("server.placeholderArg") : "";
+  }
+
   return (
     <div class="grid gap-2">
       {rows.map((arg, index) => (
@@ -2727,7 +2842,7 @@ function ArgList({ args, onChange, onAdd, onRemove }) {
           <Input
             className={cn("rounded-r-none w-full")}
             value={arg}
-            placeholder={index === 0 ? t("server.placeholderArg") : ""}
+            placeholder={placeholderFor(index)}
             onInput={(event) => onChange(index, event.currentTarget.value)}
           />
           <button class={cn(buttonVariants({ variant: "outline" }), "rounded-l-none")} type="button" onClick={() => onRemove(index)} disabled={!args.length}>
@@ -2742,108 +2857,246 @@ function ArgList({ args, onChange, onAdd, onRemove }) {
   );
 }
 
-function ServerForm({ form, saving, testing, onSubmit, onTest, onClear, onPreset, onUpdate, onArgChange, onAddArg, onRemoveArg, onHeaderChange, onAddHeader, onRemoveHeader }) {
-  const showSyntheticPresetOption = form.presetId === existingConfigPresetId || form.presetId === customStdioPresetId;
+function EnvList({ env, onChange, onAdd, onRemove }) {
   return (
-    <form class="grid gap-6 p-6" onSubmit={onSubmit}>
-      <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <h3 class="text-lg font-black">{t("server.details")}</h3>
-          <p class="text-sm text-muted-foreground">{t("server.detailsHelp")}</p>
-        </div>
-        <button class={cn(buttonVariants({ variant: "ghost" }))} type="button" onClick={onClear}>
-          {t("common.clearForm")}
-        </button>
+    <div class="grid gap-2">
+      <div class="hidden grid-cols-[auto_1fr_1fr_auto] gap-2 px-2 text-xs font-bold uppercase tracking-wide text-muted-foreground md:grid">
+        <span>{t("common.on")}</span>
+        <span>{t("common.key")}</span>
+        <span>{t("common.value")}</span>
+        <span></span>
       </div>
+      {env.map((row, index) => (
+        <div key={index} class="grid gap-2 rounded-2xl border border-border bg-muted/50 p-2 md:grid-cols-[auto_1fr_1fr_auto] md:items-center md:border-0 md:bg-transparent md:p-0">
+          <label class="flex cursor-pointer items-center gap-2 md:justify-center">
+            <Checkbox checked={row.enabled} onCheckedChange={(checked) => onChange(index, "enabled", checked)} />
+            <span class="md:hidden">{t("common.enabled")}</span>
+          </label>
+          <Input className={cn("h-8 w-full font-mono text-xs")} value={row.key} placeholder={t("server.placeholderEnvKey")} onInput={(event) => onChange(index, "key", event.currentTarget.value)} />
+          <Input
+            className={cn("h-8 w-full font-mono text-xs")}
+            type={isSecretEnvKey(row.key) ? "password" : "text"}
+            value={row.value}
+            placeholder={t("server.placeholderEnvValue")}
+            onInput={(event) => onChange(index, "value", event.currentTarget.value)}
+          />
+          <button class={cn(buttonVariants({ variant: "ghost", size: "sm" }))} type="button" onClick={() => onRemove(index)}>
+            {t("common.remove")}
+          </button>
+        </div>
+      ))}
+      <button class={cn(buttonVariants({ variant: "outline", size: "sm" }), "justify-self-start")} type="button" onClick={onAdd}>
+        {t("server.addEnv")}
+      </button>
+    </div>
+  );
+}
 
-      <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Field label={t("server.preset")} wide>
-          <NativeSelect className={cn("w-full")} value={form.presetId} onChange={(event) => onPreset(event.currentTarget.value)}>
-            {showSyntheticPresetOption ? (
-              <option value={form.presetId}>{presetLabelForForm(form)}</option>
-            ) : null}
-            {presets.map((preset) => (
-              <option key={preset.id} value={preset.id}>
-                {presetLabel(preset)}
-              </option>
-            ))}
-          </NativeSelect>
-          <div class="mt-3 rounded-2xl border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
+function ServerForm({
+  form,
+  saving,
+  testing,
+  testResult,
+  onSubmit,
+  onTest,
+  onClear,
+  onPreset,
+  onUpdate,
+  onArgChange,
+  onAddArg,
+  onRemoveArg,
+  onHeaderChange,
+  onAddHeader,
+  onRemoveHeader,
+  onEnvChange,
+  onAddEnv,
+  onRemoveEnv,
+}) {
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [pasteCommand, setPasteCommand] = useState("");
+  const showSyntheticPresetOption = form.presetId === existingConfigPresetId || form.presetId === customStdioPresetId;
+  const isHTTP = form.transport === "http";
+  const showHarnessWarning = isHTTP && isHarnessHostedURL(form.url);
+
+  function applyPasteCommand() {
+    const tokens = splitCommandLine(pasteCommand);
+    if (!tokens.length) return;
+    onUpdate("command", tokens[0]);
+    onUpdate("args", tokens.slice(1));
+    setPasteCommand("");
+  }
+
+  return (
+    <form class="flex min-h-0 flex-1 flex-col" onSubmit={onSubmit}>
+      <div class="grid gap-6 p-6">
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h3 class="text-lg font-black">{t("server.details")}</h3>
+            <p class="text-sm text-muted-foreground">{t("server.detailsHelp")}</p>
+          </div>
+          <button class={cn(buttonVariants({ variant: "ghost" }))} type="button" onClick={onClear}>
+            {t("common.clearForm")}
+          </button>
+        </div>
+
+        <div class="grid gap-4 md:grid-cols-2">
+          <Field label={t("common.name")}>
+            <Input className={cn("w-full")} required value={form.name} placeholder={t("server.placeholderName")} onInput={(event) => onUpdate("name", event.currentTarget.value)} />
+          </Field>
+          <Field label={t("server.preset")}>
+            <NativeSelect className={cn("w-full")} value={form.presetId} onChange={(event) => onPreset(event.currentTarget.value)}>
+              {showSyntheticPresetOption ? (
+                <option value={form.presetId}>{presetLabelForForm(form)}</option>
+              ) : null}
+              {presets.map((preset) => (
+                <option key={preset.id} value={preset.id}>
+                  {presetLabel(preset)}
+                </option>
+              ))}
+            </NativeSelect>
+          </Field>
+          <div class="md:col-span-2 rounded-2xl border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
             <div class="font-bold">{presetLabelForForm(form)}</div>
             <p class="mt-1 text-xs leading-relaxed text-blue-700">{presetDescriptionForForm(form)}</p>
           </div>
-        </Field>
+        </div>
+
         <Field label={t("server.transport")}>
-          <NativeSelect className={cn("w-full")} value={form.transport} onChange={(event) => onUpdate("transport", event.currentTarget.value)}>
-            <option value="http">{t("settings.httpUrl")}</option>
-            <option value="stdio">{t("settings.localStdio")}</option>
-          </NativeSelect>
+          <div class="inline-flex w-full max-w-md rounded-lg border border-border bg-muted/50 p-1">
+            <button
+              class={cn(buttonVariants({ variant: isHTTP ? "default" : "ghost", size: "sm" }), "flex-1")}
+              type="button"
+              onClick={() => onUpdate("transport", "http")}
+            >
+              {t("server.transportRemote")}
+            </button>
+            <button
+              class={cn(buttonVariants({ variant: !isHTTP ? "default" : "ghost", size: "sm" }), "flex-1")}
+              type="button"
+              onClick={() => onUpdate("transport", "stdio")}
+            >
+              {t("server.transportLocal")}
+            </button>
+          </div>
+          <p class="mt-2 text-xs text-muted-foreground">{isHTTP ? t("server.transportRemoteHelp") : t("server.transportLocalHelp")}</p>
         </Field>
-        <Field label={t("server.weight")}>
-          <Input className={cn("w-full")} min="1" type="number" value={form.weight} onInput={(event) => onUpdate("weight", event.currentTarget.value)} />
-        </Field>
-        <Field label={t("common.name")}>
-          <Input className={cn("w-full")} required value={form.name} placeholder={t("server.placeholderName")} onInput={(event) => onUpdate("name", event.currentTarget.value)} />
-        </Field>
-        {form.transport === "http" ? (
-          <>
-            <Field label={t("server.mcpServerUrl")} wide>
+
+        {isHTTP ? (
+          <div class="grid gap-4">
+            <Field label={t("server.mcpServerUrl")}>
               <Input className={cn("w-full")} required value={form.url} placeholder={t("server.placeholderUrl")} onInput={(event) => onUpdate("url", event.currentTarget.value)} />
               <p class="mt-2 text-xs text-muted-foreground">{t("server.urlHelp")}</p>
             </Field>
-            <div class="xl:col-span-4">
-              <AuthAndHeaders
-                authType={form.authType}
-                token={form.token}
-                apiKeyName={form.apiKeyName}
-                apiKeyValue={form.apiKeyValue}
-                apiKeyIn={form.apiKeyIn}
-                username={form.username}
-                password={form.password}
-                headers={form.headers}
-                onAuthType={(value) => onUpdate("authType", value)}
-                onToken={(value) => onUpdate("token", value)}
-                onAPIKeyName={(value) => onUpdate("apiKeyName", value)}
-                onAPIKeyValue={(value) => onUpdate("apiKeyValue", value)}
-                onAPIKeyIn={(value) => onUpdate("apiKeyIn", value)}
-                onUsername={(value) => onUpdate("username", value)}
-                onPassword={(value) => onUpdate("password", value)}
-                onHeaderChange={onHeaderChange}
-                onAddHeader={onAddHeader}
-                onRemoveHeader={onRemoveHeader}
-              />
-            </div>
-          </>
+            {showHarnessWarning ? (
+              <div class="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{t("server.harnessHostedWarning")}</div>
+            ) : null}
+            <AuthAndHeaders
+              authType={form.authType}
+              token={form.token}
+              apiKeyName={form.apiKeyName}
+              apiKeyValue={form.apiKeyValue}
+              apiKeyIn={form.apiKeyIn}
+              username={form.username}
+              password={form.password}
+              headers={form.headers}
+              onAuthType={(value) => onUpdate("authType", value)}
+              onToken={(value) => onUpdate("token", value)}
+              onAPIKeyName={(value) => onUpdate("apiKeyName", value)}
+              onAPIKeyValue={(value) => onUpdate("apiKeyValue", value)}
+              onAPIKeyIn={(value) => onUpdate("apiKeyIn", value)}
+              onUsername={(value) => onUpdate("username", value)}
+              onPassword={(value) => onUpdate("password", value)}
+              onHeaderChange={onHeaderChange}
+              onAddHeader={onAddHeader}
+              onRemoveHeader={onRemoveHeader}
+            />
+          </div>
         ) : (
-          <>
-            <Field label={t("server.command")} wide>
-              <Input className={cn("w-full")} required value={form.command} placeholder={t("server.placeholderCommand")} onInput={(event) => onUpdate("command", event.currentTarget.value)} />
+          <div class="grid gap-4">
+            <Field label={t("server.pasteCommand")}>
+              <div class="flex w-full gap-2">
+                <Input
+                  className={cn("w-full font-mono")}
+                  value={pasteCommand}
+                  placeholder={t("server.placeholderPasteCommand")}
+                  onInput={(event) => setPasteCommand(event.currentTarget.value)}
+                />
+                <button class={cn(buttonVariants({ variant: "outline" }))} type="button" onClick={applyPasteCommand} disabled={!pasteCommand.trim()}>
+                  {t("common.apply")}
+                </button>
+              </div>
+              <p class="mt-2 text-xs text-muted-foreground">{t("server.pasteCommandHelp")}</p>
             </Field>
-            <Field label={t("server.args")} wide>
-              <ArgList args={form.args} onChange={onArgChange} onAdd={onAddArg} onRemove={onRemoveArg} />
+            <Field label={t("server.command")}>
+              <Input className={cn("w-full font-mono")} required value={form.command} placeholder={t("server.placeholderCommand")} onInput={(event) => onUpdate("command", event.currentTarget.value)} />
+              <p class="mt-2 text-xs text-muted-foreground">{t("server.commandHelp")}</p>
+            </Field>
+            <Field label={t("server.args")}>
+              <ArgList args={form.args} command={form.command} onChange={onArgChange} onAdd={onAddArg} onRemove={onRemoveArg} />
               <p class="mt-2 text-xs text-muted-foreground">{t("server.argsHelp")}</p>
             </Field>
-            <div class="rounded-2xl border border-border bg-muted/50 p-3 text-sm text-muted-foreground md:col-span-2 xl:col-span-4">
+            {commandPreviewText(form) ? (
+              <div class="rounded-2xl border border-border bg-muted/50 p-3">
+                <div class="text-xs font-bold uppercase tracking-wide text-muted-foreground">{t("server.commandPreview")}</div>
+                <code class="mt-1 block break-all font-mono text-sm text-foreground">{commandPreviewText(form)}</code>
+              </div>
+            ) : null}
+            <div class="rounded-2xl border border-border bg-card p-4">
+              <div class="mb-3">
+                <h3 class="font-black">{t("server.env")}</h3>
+                <p class="text-sm text-muted-foreground">{t("server.envHelp")}</p>
+              </div>
+              <EnvList env={form.env} onChange={onEnvChange} onAdd={onAddEnv} onRemove={onRemoveEnv} />
+            </div>
+            <div class="rounded-2xl border border-border bg-muted/50 p-3 text-sm text-muted-foreground">
               <span class="font-bold text-foreground">{t("auth.title")}:</span> {t("server.stdioAuthHelp")}
             </div>
-          </>
+            <div class="rounded-2xl border border-border bg-muted/50 p-3 text-sm text-muted-foreground">
+              <span class="font-bold text-foreground">{t("server.dockerHintTitle")}:</span> {t("server.dockerStdioHint")}
+            </div>
+          </div>
         )}
+
+        <div class="border-t border-border pt-4">
+          <button class={cn(buttonVariants({ variant: "ghost", size: "sm" }))} type="button" onClick={() => setAdvancedOpen((current) => !current)}>
+            {advancedOpen ? t("server.hideAdvanced") : t("server.showAdvanced")}
+          </button>
+          {advancedOpen ? (
+            <div class="mt-3 grid gap-4 md:grid-cols-2">
+              <Field label={t("server.weight")}>
+                <Input className={cn("w-full")} min="1" type="number" value={form.weight} onInput={(event) => onUpdate("weight", event.currentTarget.value)} />
+              </Field>
+            </div>
+          ) : null}
+        </div>
       </div>
 
-      <div class="flex flex-col gap-3 border-t border-border pt-5 sm:flex-row sm:items-center sm:justify-between">
-        <label class="flex cursor-pointer items-center gap-3">
-          <Checkbox checked={form.enabled} onCheckedChange={(checked) => onUpdate("enabled", checked)} />
-          <span class="font-semibold">{t("common.enabled")}</span>
-        </label>
-        <div class="flex flex-col gap-2 sm:flex-row">
-          <Button className="min-w-40" variant="outline" type="button" disabled={testing || saving} onClick={onTest}>
-            {testing ? <Spinner size="sm" /> : null}
-            {testing ? t("common.testing") : t("action.testConnection")}
-          </Button>
-          <Button className="min-w-40" type="submit" disabled={saving || testing}>
-            {saving ? <Spinner size="sm" /> : null}
-            {saving ? t("common.saving") : t("action.saveServer")}
-          </Button>
+      <div class="sticky bottom-0 z-10 flex flex-col gap-3 border-t border-border bg-background/95 px-6 py-4 backdrop-blur">
+        {testResult ? (
+          <div
+            class={cn(
+              "rounded-2xl border p-3 text-sm",
+              testResult.status === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-red-200 bg-red-50 text-red-800",
+            )}
+          >
+            {testResult.message}
+          </div>
+        ) : null}
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <label class="flex cursor-pointer items-center gap-3">
+            <Checkbox checked={form.enabled} onCheckedChange={(checked) => onUpdate("enabled", checked)} />
+            <span class="font-semibold">{t("common.enabled")}</span>
+          </label>
+          <div class="flex flex-col gap-2 sm:flex-row">
+            <Button className="min-w-40" variant="outline" type="button" disabled={testing || saving} onClick={onTest}>
+              {testing ? <Spinner size="sm" /> : null}
+              {testing ? t("common.testing") : t("action.testConnection")}
+            </Button>
+            <Button className="min-w-40" type="submit" disabled={saving || testing}>
+              {saving ? <Spinner size="sm" /> : null}
+              {saving ? t("common.saving") : t("action.saveServer")}
+            </Button>
+          </div>
         </div>
       </div>
     </form>
@@ -3377,7 +3630,19 @@ function AuthAndHeaders({
         {authType === "apiKey" ? (
           <>
             <Field label={t("auth.keyName")}>
-              <Input className={cn("w-full")} value={apiKeyName} placeholder={t("auth.placeholderKeyName")} onInput={(event) => onAPIKeyName(event.currentTarget.value)} />
+              <Input
+                className={cn("w-full")}
+                value={apiKeyName}
+                placeholder={t("auth.placeholderKeyName")}
+                list="auth-key-name-options"
+                onInput={(event) => onAPIKeyName(event.currentTarget.value)}
+              />
+              <datalist id="auth-key-name-options">
+                {commonAPIKeyHeaderNames.map((name) => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
+              <p class="mt-2 text-xs text-muted-foreground">{t("auth.keyNameHelp")}</p>
             </Field>
             <Field label={t("auth.addTo")}>
               <NativeSelect className={cn("w-full")} value={apiKeyIn} onChange={(event) => onAPIKeyIn(event.currentTarget.value)}>

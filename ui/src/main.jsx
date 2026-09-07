@@ -93,6 +93,7 @@ const stdioDefaultArgs = ["-y", ""];
 const commonAPIKeyHeaderNames = ["x-api-key", "x-harness-api-key", "Authorization"];
 const secretEnvKeyPattern = /token|key|secret|password/i;
 const harnessHostedHostname = "mcp.harness.io";
+const serverFormId = "server-form-fields";
 
 const initialEndpointForm = {
   id: "",
@@ -484,6 +485,10 @@ function buildEnv(form) {
     const value = row.value.trim();
     if (!row.enabled || (!key && !value)) continue;
     if (!key) throw new Error(t("error.envKeyRequired"));
+    // A blank value means "inherit from the gateway process environment".
+    // Sending an explicit empty string would override (and hide) any real
+    // value already present in the process env when the stdio server starts.
+    if (!value) continue;
     env[key] = value;
   }
 
@@ -1475,6 +1480,39 @@ function App() {
       ...current,
       env: current.env.length === 1 ? [{ key: "", value: "", enabled: true }] : current.env.filter((_, i) => i !== index),
     }));
+  }
+
+  function applyPastedCommand(value) {
+    const tokens = splitCommandLine(value);
+    if (!tokens.length) return;
+    const envTokenPattern = /^[A-Za-z_][A-Za-z0-9_]*=.*$/;
+    let splitIndex = 0;
+    while (splitIndex < tokens.length && envTokenPattern.test(tokens[splitIndex])) {
+      splitIndex += 1;
+    }
+    const envTokens = tokens.slice(0, splitIndex);
+    const remaining = tokens.slice(splitIndex);
+    if (!remaining.length) return;
+
+    setForm((current) => {
+      let env = current.env;
+      for (const token of envTokens) {
+        const eqIndex = token.indexOf("=");
+        const key = token.slice(0, eqIndex);
+        const value = token.slice(eqIndex + 1);
+        const existingIndex = env.findIndex((row) => row.key === key);
+        env = existingIndex >= 0
+          ? env.map((row, i) => (i === existingIndex ? { ...row, value, enabled: true } : row))
+          : [...env, { key, value, enabled: true }];
+      }
+      if (envTokens.length) {
+        // Drop unused blank placeholder rows once real env rows exist.
+        const withoutBlanks = env.filter((row) => row.key.trim() || row.value.trim());
+        env = withoutBlanks.length ? withoutBlanks : env;
+      }
+      return { ...current, command: remaining[0], args: remaining.slice(1), env };
+    });
+    setServerTestResult(null);
   }
 
   function selectPreset(presetId) {
@@ -2476,14 +2514,20 @@ function App() {
           setServerModalOpen(false);
           setServerTestResult(null);
         }}
+        footer={
+          <ServerFormFooter
+            form={form}
+            saving={saving}
+            testing={testingServer}
+            testResult={serverTestResult}
+            onTest={testServerForm}
+            onUpdate={updateForm}
+          />
+        }
       >
         <ServerForm
           form={form}
-          saving={saving}
-          testing={testingServer}
-          testResult={serverTestResult}
           onSubmit={saveServer}
-          onTest={testServerForm}
           onClear={() => {
             setServerIdTouched(false);
             setEditingServer(false);
@@ -2495,6 +2539,7 @@ function App() {
           onArgChange={updateArg}
           onAddArg={addArg}
           onRemoveArg={removeArg}
+          onApplyPasteCommand={applyPastedCommand}
           onHeaderChange={updateHeader}
           onAddHeader={addHeader}
           onRemoveHeader={removeHeader}
@@ -2744,11 +2789,11 @@ function TopBar({ title, description, children }) {
   );
 }
 
-function ServerModal({ open, title, description, onClose, children }) {
+function ServerModal({ open, title, description, onClose, footer, children }) {
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
       <DialogContent className="max-w-6xl gap-0 overflow-hidden p-0" onInteractOutside={(event) => event.preventDefault()}>
-        <div class="sticky top-0 z-10 flex shrink-0 items-start justify-between gap-4 border-b bg-background/95 px-6 py-5 backdrop-blur">
+        <div class="flex shrink-0 items-start justify-between gap-4 border-b bg-background/95 px-6 py-5">
           <DialogHeader className="text-left">
             <DialogTitle>{title}</DialogTitle>
             <DialogDescription>{description}</DialogDescription>
@@ -2758,6 +2803,7 @@ function ServerModal({ open, title, description, onClose, children }) {
           </Button>
         </div>
         <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">{children}</div>
+        {footer ? <div class="flex shrink-0 flex-col gap-3 border-t border-border bg-background px-6 py-4">{footer}</div> : null}
       </DialogContent>
     </Dialog>
   );
@@ -2902,17 +2948,14 @@ function EnvList({ env, onChange, onAdd, onRemove }) {
 
 function ServerForm({
   form,
-  saving,
-  testing,
-  testResult,
   onSubmit,
-  onTest,
   onClear,
   onPreset,
   onUpdate,
   onArgChange,
   onAddArg,
   onRemoveArg,
+  onApplyPasteCommand,
   onHeaderChange,
   onAddHeader,
   onRemoveHeader,
@@ -2927,16 +2970,12 @@ function ServerForm({
   const showHarnessWarning = isHTTP && isHarnessHostedURL(form.url);
 
   function applyPasteCommand() {
-    const tokens = splitCommandLine(pasteCommand);
-    if (!tokens.length) return;
-    onUpdate("command", tokens[0]);
-    onUpdate("args", tokens.slice(1));
+    onApplyPasteCommand(pasteCommand);
     setPasteCommand("");
   }
 
   return (
-    <form class="flex min-h-0 flex-1 flex-col" onSubmit={onSubmit}>
-      <div class="grid gap-6 p-6">
+    <form id={serverFormId} class="grid gap-6 p-6" onSubmit={onSubmit}>
         <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <h3 class="text-lg font-black">{t("server.details")}</h3>
@@ -2963,9 +3002,9 @@ function ServerForm({
               ))}
             </NativeSelect>
           </Field>
-          <div class="md:col-span-2 rounded-2xl border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
+          <div class="md:col-span-2 rounded-2xl border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-200">
             <div class="font-bold">{presetLabelForForm(form)}</div>
-            <p class="mt-1 text-xs leading-relaxed text-blue-700">{presetDescriptionForForm(form)}</p>
+            <p class="mt-1 text-xs leading-relaxed text-blue-700 dark:text-blue-300">{presetDescriptionForForm(form)}</p>
           </div>
         </div>
 
@@ -2996,7 +3035,7 @@ function ServerForm({
               <p class="mt-2 text-xs text-muted-foreground">{t("server.urlHelp")}</p>
             </Field>
             {showHarnessWarning ? (
-              <div class="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{t("server.harnessHostedWarning")}</div>
+              <div class="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">{t("server.harnessHostedWarning")}</div>
             ) : null}
             <AuthAndHeaders
               authType={form.authType}
@@ -3077,37 +3116,42 @@ function ServerForm({
             </div>
           ) : null}
         </div>
-      </div>
+    </form>
+  );
+}
 
-      <div class="sticky bottom-0 z-10 flex flex-col gap-3 border-t border-border bg-background/95 px-6 py-4 backdrop-blur">
-        {testResult ? (
-          <div
-            class={cn(
-              "rounded-2xl border p-3 text-sm",
-              testResult.status === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-red-200 bg-red-50 text-red-800",
-            )}
-          >
-            {testResult.message}
-          </div>
-        ) : null}
-        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <label class="flex cursor-pointer items-center gap-3">
-            <Checkbox checked={form.enabled} onCheckedChange={(checked) => onUpdate("enabled", checked)} />
-            <span class="font-semibold">{t("common.enabled")}</span>
-          </label>
-          <div class="flex flex-col gap-2 sm:flex-row">
-            <Button className="min-w-40" variant="outline" type="button" disabled={testing || saving} onClick={onTest}>
-              {testing ? <Spinner size="sm" /> : null}
-              {testing ? t("common.testing") : t("action.testConnection")}
-            </Button>
-            <Button className="min-w-40" type="submit" disabled={saving || testing}>
-              {saving ? <Spinner size="sm" /> : null}
-              {saving ? t("common.saving") : t("action.saveServer")}
-            </Button>
-          </div>
+function ServerFormFooter({ form, saving, testing, testResult, onTest, onUpdate }) {
+  return (
+    <>
+      {testResult ? (
+        <div
+          class={cn(
+            "rounded-2xl border p-3 text-sm",
+            testResult.status === "success"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200"
+              : "border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200",
+          )}
+        >
+          {testResult.message}
+        </div>
+      ) : null}
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <label class="flex cursor-pointer items-center gap-3">
+          <Checkbox checked={form.enabled} onCheckedChange={(checked) => onUpdate("enabled", checked)} />
+          <span class="font-semibold">{t("common.enabled")}</span>
+        </label>
+        <div class="flex flex-col gap-2 sm:flex-row">
+          <Button className="min-w-40" variant="outline" type="button" disabled={testing || saving} onClick={onTest}>
+            {testing ? <Spinner size="sm" /> : null}
+            {testing ? t("common.testing") : t("action.testConnection")}
+          </Button>
+          <Button className="min-w-40" type="submit" form={serverFormId} disabled={saving || testing}>
+            {saving ? <Spinner size="sm" /> : null}
+            {saving ? t("common.saving") : t("action.saveServer")}
+          </Button>
         </div>
       </div>
-    </form>
+    </>
   );
 }
 

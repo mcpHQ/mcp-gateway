@@ -16,6 +16,40 @@ import (
 
 const protocolVersion = "2024-11-05"
 
+// maxToolsListPages caps how many tools/list pages we follow so a
+// misbehaving upstream (e.g. one that always returns a nextCursor) can't
+// cause an unbounded loop.
+const maxToolsListPages = 200
+
+type toolsListPage struct {
+	Tools      []Tool `json:"tools"`
+	NextCursor string `json:"nextCursor,omitempty"`
+}
+
+// listAllTools follows MCP tools/list pagination, calling fetch once per
+// page with the cursor to request (empty for the first page), until the
+// server stops returning a nextCursor or the page cap is reached.
+func listAllTools(fetch func(cursor string) (json.RawMessage, error)) ([]Tool, error) {
+	var all []Tool
+	cursor := ""
+	for page := 0; page < maxToolsListPages; page++ {
+		raw, err := fetch(cursor)
+		if err != nil {
+			return nil, err
+		}
+		var payload toolsListPage
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, err
+		}
+		all = append(all, payload.Tools...)
+		if payload.NextCursor == "" {
+			return all, nil
+		}
+		cursor = payload.NextCursor
+	}
+	return all, nil
+}
+
 type Tool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
@@ -92,7 +126,12 @@ func (c *Client) Start(ctx context.Context) error {
 		return nil
 	}
 
-	cmd := exec.CommandContext(ctx, c.command, c.args...)
+	// The stdio process must outlive the request context that triggered
+	// Start (e.g. the HTTP request context for save/enable/restart). Only
+	// initialize/RPC calls below honor ctx for timeouts; the process itself
+	// is tied to an independent, long-lived context so it isn't killed when
+	// that request ends.
+	cmd := exec.CommandContext(context.Background(), c.command, c.args...)
 	cmd.Env = os.Environ()
 	for key, value := range c.env {
 		cmd.Env = append(cmd.Env, key+"="+value)
@@ -165,18 +204,13 @@ func (c *Client) Status() Status {
 }
 
 func (c *Client) ListTools(ctx context.Context) ([]Tool, error) {
-	result, err := c.call(ctx, "tools/list", map[string]any{})
-	if err != nil {
-		return nil, err
-	}
-
-	var payload struct {
-		Tools []Tool `json:"tools"`
-	}
-	if err := json.Unmarshal(result, &payload); err != nil {
-		return nil, err
-	}
-	return payload.Tools, nil
+	return listAllTools(func(cursor string) (json.RawMessage, error) {
+		params := map[string]any{}
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		return c.call(ctx, "tools/list", params)
+	})
 }
 
 func (c *Client) CallTool(ctx context.Context, name string, args map[string]any) (CallResult, error) {

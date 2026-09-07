@@ -213,6 +213,202 @@ func TestParseSSEResponseMatchesID(t *testing.T) {
 	}
 }
 
+func TestHTTPClientInitializeFailsOnJSONRPCError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		method, _ := req["method"].(string)
+		id, _ := req["id"].(float64)
+
+		if method != "initialize" {
+			t.Fatalf("unexpected method %q after initialize should have failed", method)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      int64(id),
+			"error":   map[string]any{"code": -32001, "message": "unsupported protocol version"},
+		})
+	}))
+	defer server.Close()
+
+	client := NewHTTPClient("test", server.URL, config.AuthConfig{}, nil)
+	err := client.Start(context.Background())
+	if err == nil {
+		t.Fatal("expected Start to fail on JSON-RPC error from initialize")
+	}
+	if !strings.Contains(err.Error(), "unsupported protocol version") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if client.Status().Running {
+		t.Fatal("client should not be running after initialize JSON-RPC error")
+	}
+}
+
+func TestHTTPClientListToolsPaginates(t *testing.T) {
+	t.Parallel()
+
+	var listCalls atomic.Int64
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		method, _ := req["method"].(string)
+		id, _ := req["id"].(float64)
+
+		switch method {
+		case "initialize":
+			writeJSONRPC(w, int64(id), map[string]any{
+				"protocolVersion": protocolVersion,
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]any{"name": "test", "version": "1"},
+			})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			call := listCalls.Add(1)
+			params, _ := req["params"].(map[string]any)
+			cursor, _ := params["cursor"].(string)
+			switch call {
+			case 1:
+				if cursor != "" {
+					t.Fatalf("expected empty cursor on first page, got %q", cursor)
+				}
+				writeJSONRPC(w, int64(id), map[string]any{
+					"tools":      []map[string]any{{"name": "alpha"}},
+					"nextCursor": "page-2",
+				})
+			case 2:
+				if cursor != "page-2" {
+					t.Fatalf("expected cursor page-2, got %q", cursor)
+				}
+				writeJSONRPC(w, int64(id), map[string]any{
+					"tools": []map[string]any{{"name": "beta"}},
+				})
+			default:
+				t.Fatalf("unexpected tools/list call %d", call)
+			}
+		default:
+			t.Fatalf("unexpected method %q", method)
+		}
+	}))
+	defer server.Close()
+
+	client := NewHTTPClient("test", server.URL, config.AuthConfig{}, nil)
+	if err := client.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	tools, err := client.ListTools(context.Background())
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	if len(tools) != 2 || tools[0].Name != "alpha" || tools[1].Name != "beta" {
+		t.Fatalf("unexpected tools: %+v", tools)
+	}
+	if got := listCalls.Load(); got != 2 {
+		t.Fatalf("expected 2 tools/list calls, got %d", got)
+	}
+}
+
+func TestHTTPClientSendsProtocolVersionHeader(t *testing.T) {
+	t.Parallel()
+
+	var sawInitHeader, sawListHeader, sawDeleteHeader string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			sawDeleteHeader = r.Header.Get(mcpProtocolVersionHeader)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		method, _ := req["method"].(string)
+		id, _ := req["id"].(float64)
+
+		switch method {
+		case "initialize":
+			sawInitHeader = r.Header.Get(mcpProtocolVersionHeader)
+			w.Header().Set(mcpSessionHeader, "session-1")
+			writeJSONRPC(w, int64(id), map[string]any{
+				"protocolVersion": protocolVersion,
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]any{"name": "test", "version": "1"},
+			})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			sawListHeader = r.Header.Get(mcpProtocolVersionHeader)
+			writeJSONRPC(w, int64(id), map[string]any{"tools": []map[string]any{}})
+		}
+	}))
+	defer server.Close()
+
+	client := NewHTTPClient("test", server.URL, config.AuthConfig{}, nil)
+	if err := client.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if _, err := client.ListTools(context.Background()); err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	client.Stop()
+
+	if sawInitHeader != protocolVersion {
+		t.Fatalf("initialize expected protocol header %q, got %q", protocolVersion, sawInitHeader)
+	}
+	if sawListHeader != protocolVersion {
+		t.Fatalf("tools/list expected protocol header %q, got %q", protocolVersion, sawListHeader)
+	}
+	if sawDeleteHeader != protocolVersion {
+		t.Fatalf("DELETE expected protocol header %q, got %q", protocolVersion, sawDeleteHeader)
+	}
+}
+
+func TestApplyAuthDoesNotExpandBareDollarSign(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "expanded-token-value")
+
+	client := NewHTTPClient("test", "http://example.invalid", config.AuthConfig{
+		Type:        "apiKey",
+		APIKeyName:  "Authorization",
+		APIKeyValue: "pat.$abc",
+	}, nil)
+
+	req, err := http.NewRequest(http.MethodGet, "http://example.invalid", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	if err := client.applyAuth(req); err != nil {
+		t.Fatalf("applyAuth: %v", err)
+	}
+	if got := req.Header.Get("Authorization"); got != "pat.$abc" {
+		t.Fatalf("expected literal api key value, got %q", got)
+	}
+}
+
+func TestApplyAuthExpandsEnvVarPlaceholder(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "expanded-token-value")
+
+	client := NewHTTPClient("test", "http://example.invalid", config.AuthConfig{
+		Type:  "bearer",
+		Token: "${GITHUB_TOKEN}",
+	}, nil)
+
+	req, err := http.NewRequest(http.MethodGet, "http://example.invalid", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	if err := client.applyAuth(req); err != nil {
+		t.Fatalf("applyAuth: %v", err)
+	}
+	if got := req.Header.Get("Authorization"); got != "Bearer expanded-token-value" {
+		t.Fatalf("expected expanded bearer token, got %q", got)
+	}
+}
+
 func writeJSONRPC(w http.ResponseWriter, id int64, result map[string]any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{

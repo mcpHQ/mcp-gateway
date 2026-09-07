@@ -1,16 +1,86 @@
 package gateway
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/rajdas/mcp-gateway/internal/config"
 	"github.com/rajdas/mcp-gateway/internal/mcp"
 )
+
+// TestMain lets this test binary double as a fake stdio MCP server (see
+// internal/mcp/client_test.go for the same pattern), used by
+// TestUpsertServerKeepsStdioServerRunningAfterRequestContextEnds below to
+// exercise the real mcp.Client instead of fakeUpstream.
+func TestMain(m *testing.M) {
+	if os.Getenv("MCP_GATEWAY_TEST_STDIO_HELPER") == "1" {
+		runGatewayStdioHelperProcess()
+		return
+	}
+	os.Exit(m.Run())
+}
+
+func runGatewayStdioHelperProcess() {
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			return
+		}
+		var req map[string]any
+		if err := json.Unmarshal(line, &req); err != nil {
+			continue
+		}
+		method, _ := req["method"].(string)
+		idVal, hasID := req["id"]
+
+		switch method {
+		case "initialize":
+			writeGatewayHelperMessage(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      idVal,
+				"result": map[string]any{
+					"protocolVersion": "2024-11-05",
+					"capabilities":    map[string]any{},
+					"serverInfo":      map[string]any{"name": "fake", "version": "1"},
+				},
+			})
+		case "notifications/initialized":
+			// no response expected
+		case "tools/list":
+			writeGatewayHelperMessage(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      idVal,
+				"result":  map[string]any{"tools": []map[string]any{{"name": "alpha"}}},
+			})
+		default:
+			if hasID {
+				writeGatewayHelperMessage(map[string]any{
+					"jsonrpc": "2.0",
+					"id":      idVal,
+					"error":   map[string]any{"code": -32601, "message": "method not found"},
+				})
+			}
+		}
+	}
+}
+
+func writeGatewayHelperMessage(value any) {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return
+	}
+	payload = append(payload, '\n')
+	_, _ = os.Stdout.Write(payload)
+}
 
 type fakeUpstream struct {
 	tools     []mcp.Tool
@@ -152,6 +222,79 @@ func TestRefreshToolsKeepsStaleCatalogOnFailure(t *testing.T) {
 	}
 	if !hasTool(tools, "test__alpha") || hasTool(tools, "test__beta") {
 		t.Fatalf("expected stale catalog after failed refresh, got %#v", tools)
+	}
+}
+
+func TestUpsertServerKeepsStdioServerRunningAfterRequestContextEnds(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	gw := New(store)
+	defer gw.Close()
+
+	server := testServer()
+	server.Command = os.Args[0]
+	server.Args = nil
+	server.Env = map[string]string{"MCP_GATEWAY_TEST_STDIO_HELPER": "1"}
+
+	// Simulate an HTTP request context that ends as soon as the handler
+	// returns (POST /api/servers passes r.Context()).
+	requestCtx, cancel := context.WithCancel(context.Background())
+	if err := gw.UpsertServer(requestCtx, server); err != nil {
+		t.Fatalf("upsert server: %v", err)
+	}
+	cancel()
+	time.Sleep(50 * time.Millisecond)
+
+	client := gw.client(server.ID)
+	if client == nil {
+		t.Fatal("expected upstream client to be registered")
+	}
+	if !client.Status().Running {
+		t.Fatalf("expected stdio server to still be running after request ctx ended, status=%+v", client.Status())
+	}
+
+	tools, err := client.ListTools(context.Background())
+	if err != nil {
+		t.Fatalf("ListTools after request ctx ended: %v", err)
+	}
+	if len(tools) == 0 {
+		t.Fatal("expected tools from still-running stdio process")
+	}
+}
+
+func TestUpsertServerPreservesAuthWhenUpdateOmitsSecrets(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	withFakeUpstream(t, &fakeUpstream{})
+	gw := New(store)
+
+	server := testServer()
+	server.Auth = config.AuthConfig{
+		Type:        "apiKey",
+		APIKeyName:  "X-Api-Key",
+		APIKeyValue: "secret-value",
+	}
+	if err := gw.UpsertServer(context.Background(), server); err != nil {
+		t.Fatalf("upsert server: %v", err)
+	}
+
+	// Mirrors the UI flow: GET /api/servers strips secrets via
+	// sanitizeServer, then the browser POSTs the form back with
+	// { "type": "none" } and empty secret fields.
+	update := testServer()
+	update.Auth = config.AuthConfig{Type: "none"}
+	if err := gw.UpsertServer(context.Background(), update); err != nil {
+		t.Fatalf("upsert server update: %v", err)
+	}
+
+	stored, ok := gw.cachedServer(update.ID)
+	if !ok {
+		t.Fatalf("expected server %q to be cached", update.ID)
+	}
+	if stored.Auth.Type != "apiKey" || stored.Auth.APIKeyName != "X-Api-Key" || stored.Auth.APIKeyValue != "secret-value" {
+		t.Fatalf("expected existing apiKey auth to be preserved, got %+v", stored.Auth)
 	}
 }
 

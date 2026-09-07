@@ -1582,8 +1582,11 @@ func sanitizeServer(server config.Server) config.Server {
 }
 
 func isAuthEmpty(auth config.AuthConfig) bool {
-	return auth.Type == "" &&
-		auth.APIKeyName == "" &&
+	// Auth is considered "not provided" (i.e. keep existing) whenever all of
+	// its secret fields are empty, regardless of Type. The UI strips secrets
+	// on GET and resubmits Type: "none" with empty fields on save, which must
+	// not clobber a previously configured auth (e.g. apiKey/bearer/basic).
+	return auth.APIKeyName == "" &&
 		auth.APIKeyValue == "" &&
 		auth.APIKeyIn == "" &&
 		auth.Token == "" &&

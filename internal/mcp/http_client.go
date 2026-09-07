@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,8 +19,26 @@ import (
 )
 
 const mcpSessionHeader = "Mcp-Session-Id"
+const mcpProtocolVersionHeader = "MCP-Protocol-Version"
 
 var errSessionExpired = errors.New("mcp session expired")
+
+// envPlaceholderPattern matches the documented ${ENV_VAR} interpolation
+// syntax only. Bare '$' bytes (e.g. inside API keys like "pat.$abc") must be
+// left untouched, unlike os.ExpandEnv which also expands bare $VAR forms.
+var envPlaceholderPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// expandEnvPlaceholders replaces ${ENV_VAR} placeholders with the named
+// environment variable's value, leaving any other '$' characters unchanged.
+func expandEnvPlaceholders(value string) string {
+	if !strings.Contains(value, "${") {
+		return value
+	}
+	return envPlaceholderPattern.ReplaceAllStringFunc(value, func(match string) string {
+		name := match[2 : len(match)-1]
+		return os.Getenv(name)
+	})
+}
 
 type HTTPClient struct {
 	id      string
@@ -75,18 +94,13 @@ func (c *HTTPClient) Status() Status {
 }
 
 func (c *HTTPClient) ListTools(ctx context.Context) ([]Tool, error) {
-	result, err := c.call(ctx, "tools/list", map[string]any{})
-	if err != nil {
-		return nil, err
-	}
-
-	var payload struct {
-		Tools []Tool `json:"tools"`
-	}
-	if err := json.Unmarshal(result, &payload); err != nil {
-		return nil, err
-	}
-	return payload.Tools, nil
+	return listAllTools(func(cursor string) (json.RawMessage, error) {
+		params := map[string]any{}
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		return c.call(ctx, "tools/list", params)
+	})
 }
 
 func (c *HTTPClient) CallTool(ctx context.Context, name string, args map[string]any) (CallResult, error) {
@@ -116,7 +130,13 @@ func (c *HTTPClient) initialize(ctx context.Context) error {
 			"version": "0.1.0",
 		},
 	}
-	if _, err := c.doRPC(ctx, "initialize", initParams, postOpts{includeSession: false}); err != nil {
+	res, err := c.doRPC(ctx, "initialize", initParams, postOpts{includeSession: false})
+	if err != nil {
+		return err
+	}
+	if res.Error != nil {
+		err := errors.New(res.Error.Message)
+		c.setError(err)
 		return err
 	}
 	return c.notify(ctx, "notifications/initialized", map[string]any{})
@@ -184,6 +204,7 @@ func (c *HTTPClient) post(ctx context.Context, payload any, wantID int64, opts p
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set(mcpProtocolVersionHeader, protocolVersion)
 	if opts.includeSession {
 		if sessionID := c.getSessionID(); sessionID != "" {
 			req.Header.Set(mcpSessionHeader, sessionID)
@@ -193,7 +214,7 @@ func (c *HTTPClient) post(ctx context.Context, payload any, wantID int64, opts p
 		return response{}, err
 	}
 	for key, value := range c.headers {
-		req.Header.Set(key, os.ExpandEnv(value))
+		req.Header.Set(key, expandEnvPlaceholders(value))
 	}
 
 	res, err := c.client.Do(req)
@@ -247,11 +268,12 @@ func (c *HTTPClient) terminateSession(ctx context.Context) {
 		return
 	}
 	req.Header.Set(mcpSessionHeader, sessionID)
+	req.Header.Set(mcpProtocolVersionHeader, protocolVersion)
 	if err := c.applyAuth(req); err != nil {
 		return
 	}
 	for key, value := range c.headers {
-		req.Header.Set(key, os.ExpandEnv(value))
+		req.Header.Set(key, expandEnvPlaceholders(value))
 	}
 
 	res, err := c.client.Do(req)
@@ -307,7 +329,7 @@ func (c *HTTPClient) applyAuth(req *http.Request) error {
 		return nil
 	case "apiKey":
 		name := strings.TrimSpace(c.auth.APIKeyName)
-		value := os.ExpandEnv(strings.TrimSpace(c.auth.APIKeyValue))
+		value := expandEnvPlaceholders(strings.TrimSpace(c.auth.APIKeyValue))
 		if name == "" || value == "" {
 			return errors.New("api key auth requires name and value")
 		}
@@ -319,14 +341,14 @@ func (c *HTTPClient) applyAuth(req *http.Request) error {
 		}
 		req.Header.Set(name, value)
 	case "bearer", "jwtBearer":
-		token := os.ExpandEnv(strings.TrimSpace(c.auth.Token))
+		token := expandEnvPlaceholders(strings.TrimSpace(c.auth.Token))
 		if token == "" {
 			return errors.New("bearer auth requires token")
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
 	case "basic":
-		username := os.ExpandEnv(strings.TrimSpace(c.auth.Username))
-		password := os.ExpandEnv(c.auth.Password)
+		username := expandEnvPlaceholders(strings.TrimSpace(c.auth.Username))
+		password := expandEnvPlaceholders(c.auth.Password)
 		if username == "" {
 			return errors.New("basic auth requires username")
 		}

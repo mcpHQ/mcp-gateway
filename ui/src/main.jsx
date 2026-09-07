@@ -393,7 +393,10 @@ function splitCommandLine(value) {
 
 function isHarnessHostedURL(url) {
   try {
-    return new URL(url).hostname.toLowerCase() === harnessHostedHostname;
+    const hostname = new URL(url).hostname.toLowerCase();
+    // Exact match covers the documented hosted endpoint; the suffix check also
+    // catches regional/hosted subdomains such as eu.mcp.harness.io.
+    return hostname === harnessHostedHostname || hostname.endsWith(`.${harnessHostedHostname}`);
   } catch {
     return false;
   }

@@ -1714,6 +1714,9 @@ function App() {
   }
 
   function testSuccessMessage(result) {
+    if (result?.status === "precheck_ok") {
+      return t("toast.serverPrecheckPassed");
+    }
     const toolCount = result?.toolCount || 0;
     return t("toast.toolsDiscovered", { count: toolCount, unit: pluralKey(toolCount, "unit.tool.one", "unit.tool.other") });
   }

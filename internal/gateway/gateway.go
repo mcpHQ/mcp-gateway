@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -160,6 +162,12 @@ const (
 	usageFlushInterval = 500 * time.Millisecond
 	auditLogQueueSize  = 256
 	auditLogAttempts   = 8
+
+	// serverStartTimeout bounds how long a background server start (see
+	// startServerAsync) waits for the upstream to complete its MCP
+	// "initialize" handshake. It's generous because stdio commands like
+	// "npx" may need to download the target package on first run.
+	serverStartTimeout = 3 * time.Minute
 )
 
 func New(store *config.Store) *Gateway {
@@ -523,12 +531,60 @@ func (g *Gateway) UpsertServer(ctx context.Context, server config.Server) error 
 	g.cacheServer(server)
 	g.stopServer(server.ID)
 	if server.Enabled {
-		if err := g.startServer(ctx, server); err != nil {
-			return err
+		if usesPackageRunnerCommand(server) {
+			// Start the upstream (and refresh its tool catalog) in the
+			// background instead of blocking this request. Package-runner
+			// commands like "npx" may need to download their package on
+			// first run, which can take far longer than a save request
+			// should wait for.
+			g.startServerAsync(server)
+		} else {
+			if err := g.startServer(ctx, server); err != nil {
+				return err
+			}
+			g.refreshServerToolsBestEffort(ctx, server)
 		}
-		g.refreshServerToolsBestEffort(ctx, server)
 	}
 	return nil
+}
+
+// packageRunnerCommands are stdio launchers that fetch/install their target
+// package on demand (usually from a registry) before they can respond,
+// which can take far longer than an interactive request should block for.
+var packageRunnerCommands = map[string]bool{
+	"npx":  true,
+	"uvx":  true,
+	"pnpm": true,
+	"bunx": true,
+	"yarn": true,
+	"pipx": true,
+	"dnx":  true,
+}
+
+// usesPackageRunnerCommand reports whether server is a stdio server whose
+// command is a package-runner (see packageRunnerCommands).
+func usesPackageRunnerCommand(server config.Server) bool {
+	if server.Transport != "stdio" {
+		return false
+	}
+	name := strings.ToLower(strings.TrimSpace(filepath.Base(server.Command)))
+	name = strings.TrimSuffix(strings.TrimSuffix(name, ".exe"), ".cmd")
+	return packageRunnerCommands[name]
+}
+
+// startServerAsync starts the given server's upstream client and refreshes
+// its tool catalog on a background goroutine, decoupled from any request
+// context. See UpsertServer for why this is needed.
+func (g *Gateway) startServerAsync(server config.Server) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), serverStartTimeout)
+		defer cancel()
+		if err := g.startServer(ctx, server); err != nil {
+			log.Printf("server_start_failed id=%s error=%q", server.ID, err.Error())
+			return
+		}
+		g.refreshServerToolsBestEffort(ctx, server)
+	}()
 }
 
 func (g *Gateway) DeleteServer(id string) bool {
@@ -695,6 +751,16 @@ func (g *Gateway) TestServer(ctx context.Context, server config.Server) (TestRes
 		return TestResult{OK: false, Status: "invalid"}, err
 	}
 
+	if usesPackageRunnerCommand(server) {
+		// Local package-runner commands such as "npx" or "uvx" may need to
+		// download their package from a registry before they can respond,
+		// which can take far longer than an interactive "Test connection"
+		// click should block for. Only check that the command can be
+		// resolved; the server itself is started in the background when
+		// it's saved (see UpsertServer).
+		return precheckStdioServer(server)
+	}
+
 	client := newUpstream(server)
 	defer client.Stop()
 
@@ -717,6 +783,16 @@ func (g *Gateway) TestServer(ctx context.Context, server config.Server) (TestRes
 		ToolCount: len(tools),
 		Tools:     names,
 	}, nil
+}
+
+// precheckStdioServer validates a stdio-based server's command without
+// starting it, so "Test connection" stays fast and never launches (or
+// downloads a package for, e.g. via "npx") the upstream process.
+func precheckStdioServer(server config.Server) (TestResult, error) {
+	if _, err := exec.LookPath(server.Command); err != nil {
+		return TestResult{OK: false, Status: "command_not_found"}, fmt.Errorf("command %q not found: %w", server.Command, err)
+	}
+	return TestResult{OK: true, Status: "precheck_ok"}, nil
 }
 
 func (g *Gateway) TestStoredServer(ctx context.Context, id string) (TestResult, error) {

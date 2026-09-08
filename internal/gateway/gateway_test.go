@@ -244,9 +244,17 @@ func TestUpsertServerKeepsStdioServerRunningAfterRequestContextEnds(t *testing.T
 		t.Fatalf("upsert server: %v", err)
 	}
 	cancel()
-	time.Sleep(50 * time.Millisecond)
 
-	client := gw.client(server.ID)
+	// UpsertServer now starts the upstream in the background (see
+	// startServerAsync), so give it a moment to come up before asserting.
+	deadline := time.Now().Add(2 * time.Second)
+	var client mcp.Upstream
+	for time.Now().Before(deadline) {
+		if client = gw.client(server.ID); client != nil && client.Status().Running {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if client == nil {
 		t.Fatal("expected upstream client to be registered")
 	}
@@ -260,6 +268,99 @@ func TestUpsertServerKeepsStdioServerRunningAfterRequestContextEnds(t *testing.T
 	}
 	if len(tools) == 0 {
 		t.Fatal("expected tools from still-running stdio process")
+	}
+}
+
+// fakeNpxBinary returns the path to an executable named like a package
+// runner (e.g. "npx") that actually just runs this test binary's stdio
+// helper (see TestMain), so real MCP handshake/tool-list traffic can be
+// exercised without depending on npx being installed.
+func fakeNpxBinary(t testing.TB, name string) string {
+	t.Helper()
+	dir := t.TempDir()
+	link := filepath.Join(dir, name)
+	if err := os.Symlink(os.Args[0], link); err != nil {
+		t.Fatalf("symlink fake %s binary: %v", name, err)
+	}
+	return link
+}
+
+func TestUpsertServerStartsPackageRunnerServersInBackground(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	gw := New(store)
+	defer gw.Close()
+
+	server := testServer()
+	server.Command = fakeNpxBinary(t, "npx")
+	server.Args = nil
+	server.Env = map[string]string{"MCP_GATEWAY_TEST_STDIO_HELPER": "1"}
+
+	start := time.Now()
+	if err := gw.UpsertServer(context.Background(), server); err != nil {
+		t.Fatalf("upsert server: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("expected saving a package-runner (npx) server to return quickly without waiting for it to start, took %v", elapsed)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var client mcp.Upstream
+	for time.Now().Before(deadline) {
+		if client = gw.client(server.ID); client != nil && client.Status().Running {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if client == nil || !client.Status().Running {
+		t.Fatal("expected package-runner server to be started in the background")
+	}
+}
+
+func TestTestServerPrechecksPackageRunnerCommandsWithoutStarting(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	gw := New(store)
+	defer gw.Close()
+
+	// This "npx" binary would hang forever (never responds to the MCP
+	// initialize handshake) if it were ever actually started, proving that
+	// TestServer only prechecks package-runner commands.
+	dir := t.TempDir()
+	hangingScript := filepath.Join(dir, "npx")
+	if err := os.WriteFile(hangingScript, []byte("#!/bin/sh\nsleep 3600\n"), 0o755); err != nil {
+		t.Fatalf("write hanging script: %v", err)
+	}
+
+	server := testServer()
+	server.Command = hangingScript
+	server.Args = nil
+
+	start := time.Now()
+	result, err := gw.TestServer(context.Background(), server)
+	if err != nil {
+		t.Fatalf("test server: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("expected precheck for package-runner command to return quickly, took %v", elapsed)
+	}
+	if !result.OK || result.Status != "precheck_ok" {
+		t.Fatalf("expected precheck_ok result, got %+v", result)
+	}
+
+	if client := gw.client(server.ID); client != nil {
+		t.Fatalf("expected precheck not to start (or register) an upstream client, got %+v", client.Status())
+	}
+
+	server.Command = filepath.Join(dir, "missing-subdir", "npx")
+	result, err = gw.TestServer(context.Background(), server)
+	if err == nil {
+		t.Fatal("expected precheck to fail for a command that cannot be found")
+	}
+	if result.OK || result.Status != "command_not_found" {
+		t.Fatalf("expected command_not_found result, got %+v", result)
 	}
 }
 

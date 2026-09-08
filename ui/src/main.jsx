@@ -2114,7 +2114,7 @@ function App() {
             <div class="workspace-stack">
               <section class="metric-grid">
                 <Stat title={t("overview.totalServers")} value={servers.length} />
-                <Stat title={t("metric.running")} value={runningServers} tone="text-emerald-600 dark:text-emerald-400" />
+                <Stat title={t("metric.running")} value={runningServers} tone="text-[var(--success)]" />
                 <Stat title={t("metric.disabled")} value={servers.filter((server) => !server.enabled).length} />
                 <Stat title={t("metric.gatewayTools")} value={gatewayToolsCount} tone="text-muted-foreground" />
               </section>
@@ -2196,7 +2196,7 @@ function App() {
             <div class="workspace-stack">
               <section class="metric-grid">
                 <Stat title={t("metric.totalEndpoints")} value={endpoints.length} />
-                <Stat title={t("common.enabled")} value={enabledEndpoints} tone="text-emerald-600 dark:text-emerald-400" />
+                <Stat title={t("common.enabled")} value={enabledEndpoints} tone="text-[var(--success)]" />
                 <Stat title={t("metric.attachedServers")} value={new Set(endpoints.flatMap((endpoint) => endpoint.serverIds || [])).size}  />
                 <Stat title={t("metric.limitedCalls")} value={endpoints.reduce((sum, endpoint) => sum + (endpoint.usage?.rateLimitedCalls || 0), 0)} tone="text-muted-foreground" />
               </section>
@@ -2267,7 +2267,7 @@ function App() {
             <div class="workspace-stack">
               <section class="metric-grid">
                 <Stat title={t("metric.totalAPIKeys")} value={apiKeys.length} />
-                <Stat title={t("common.enabled")} value={enabledAPIKeys} tone="text-emerald-600 dark:text-emerald-400" />
+                <Stat title={t("common.enabled")} value={enabledAPIKeys} tone="text-[var(--success)]" />
                 <Stat title={t("metric.endpointResources")} value={new Set(apiKeys.flatMap((key) => key.endpointIds || [])).size}  />
                 <Stat title={t("common.endpoints")} value={endpoints.length} tone="text-muted-foreground" />
               </section>
@@ -2335,7 +2335,7 @@ function App() {
               <section class="metric-grid">
                 <Stat title={t("overview.loadedTools")} value={tools.length}  />
                 <Stat title={t("common.servers")} value={servers.length} />
-                <Stat title={t("metric.runningServers")} value={runningServers} tone="text-emerald-600 dark:text-emerald-400" />
+                <Stat title={t("metric.runningServers")} value={runningServers} tone="text-[var(--success)]" />
                 <Stat title={t("metric.gatewayTools")} value={gatewayToolsCount} tone="text-muted-foreground" />
               </section>
               <ListPanel
@@ -2388,7 +2388,7 @@ function App() {
             <div class="workspace-stack">
               <section class="metric-grid">
                 <Stat title={t("metric.auditEvents")} value={auditLogs.length}  />
-                <Stat title={t("metric.failedEvents")} value={failedAuditLogs} tone={failedAuditLogs ? "text-destructive" : "text-emerald-600 dark:text-emerald-400"} />
+                <Stat title={t("metric.failedEvents")} value={failedAuditLogs} tone={failedAuditLogs ? "text-destructive" : "text-[var(--success)]"} />
                 <Stat title={t("metric.limitedCalls")} value={limitedAuditLogs} tone="text-muted-foreground" />
                 <Stat title={t("metric.mcpEvents")} value={auditLogs.filter((entry) => entry.transport === "mcp").length} />
               </section>
@@ -3005,9 +3005,9 @@ function ServerForm({
               ))}
             </NativeSelect>
           </Field>
-          <div class="md:col-span-2 rounded-2xl border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-200">
+          <div class="status-info md:col-span-2 rounded-2xl p-3 text-sm">
             <div class="font-bold">{presetLabelForForm(form)}</div>
-            <p class="mt-1 text-xs leading-relaxed text-blue-700 dark:text-blue-300">{presetDescriptionForForm(form)}</p>
+            <p class="mt-1 text-xs leading-relaxed opacity-85">{presetDescriptionForForm(form)}</p>
           </div>
         </div>
 
@@ -3038,7 +3038,7 @@ function ServerForm({
               <p class="mt-2 text-xs text-muted-foreground">{t("server.urlHelp")}</p>
             </Field>
             {showHarnessWarning ? (
-              <div class="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">{t("server.harnessHostedWarning")}</div>
+              <div class="status-warning rounded-2xl p-3 text-sm">{t("server.harnessHostedWarning")}</div>
             ) : null}
             <AuthAndHeaders
               authType={form.authType}
@@ -3131,8 +3131,8 @@ function ServerFormFooter({ form, saving, testing, testResult, onTest, onUpdate 
           class={cn(
             "rounded-2xl border p-3 text-sm",
             testResult.status === "success"
-              ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200"
-              : "border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200",
+              ? "status-success"
+              : "status-danger",
           )}
         >
           {testResult.message}
@@ -3344,9 +3344,9 @@ function statusBadgeVariant(statusClass) {
 }
 
 const statusDotClass = {
-  success: "bg-emerald-500",
-  destructive: "bg-red-500",
-  warning: "bg-amber-500",
+  success: "bg-[var(--success)]",
+  destructive: "bg-destructive",
+  warning: "bg-[var(--warning)]",
   neutral: "bg-muted-foreground",
   default: "bg-primary",
   secondary: "bg-muted-foreground",
@@ -3380,7 +3380,7 @@ function CopyButton({ text, onCopied, size = "icon" }) {
   if (size === "icon") {
     return (
       <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" type="button" onClick={handleCopy} aria-label={copied ? t("action.copied") : t("action.copy")}>
-        {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+        {copied ? <Check className="h-3.5 w-3.5 text-[var(--success)]" /> : <Copy className="h-3.5 w-3.5" />}
       </Button>
     );
   }
@@ -3434,8 +3434,8 @@ function Stat({ title, value, tone = "" }) {
 
 function OverviewCard({ label, value, detail, status = "neutral" }) {
   const dotClass = {
-    success: "bg-emerald-500",
-    warning: "bg-amber-500",
+    success: "bg-[var(--success)]",
+    warning: "bg-[var(--warning)]",
     neutral: "bg-muted-foreground",
   }[status] || "bg-muted-foreground";
 
@@ -3594,7 +3594,7 @@ function GettingStartedFlow({ endpointPattern, hasServers, hasEndpoints, hasAPIK
       </div>
       <div class="mt-5 grid gap-4 lg:grid-cols-4">
         {steps.map((step) => (
-          <Card className={cn("flex h-full flex-col", step.complete && "border-emerald-200 dark:border-emerald-900")} key={step.number}>
+          <Card className={cn("flex h-full flex-col", step.complete && "border-[color:var(--success)]")} key={step.number}>
             <CardContent className="flex flex-1 flex-col pt-4">
               <div class="flex items-center justify-between gap-3">
                 <Badge variant={step.complete ? "success" : "outline"}>{step.complete ? t("overview.stepComplete") : step.number}</Badge>
@@ -4258,8 +4258,8 @@ function ToastStack({ toasts, onDismiss }) {
           class={cn(
             "flex max-w-sm items-start gap-3 rounded-lg border bg-card p-4 shadow-lg",
             item.type === "error" && "border-destructive/30 bg-destructive/10 text-destructive",
-            item.type === "warning" && "border-amber-300 bg-amber-50 text-amber-900",
-            item.type === "success" && "border-emerald-300 bg-emerald-50 text-emerald-900",
+            item.type === "warning" && "status-warning",
+            item.type === "success" && "status-success",
           )}
         >
           <div class="min-w-0">

@@ -32,56 +32,68 @@
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
-/* shadcn zinc + brand accent */
+/* Neutral surfaces with an indigo/teal product accent. */
 :root {
-  --radius: 0.5rem;
+  --radius: 0.625rem;
   --font-geist-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --background: #ffffff;
-  --foreground: #09090b;
+  --background: #f7f8fc;
+  --foreground: #172033;
   --card: #ffffff;
-  --card-foreground: #09090b;
+  --card-foreground: #172033;
   --popover: #ffffff;
-  --popover-foreground: #09090b;
-  --primary: #18181b;
+  --popover-foreground: #172033;
+  --primary: #25324a;
   --primary-foreground: #fafafa;
-  --secondary: #f4f4f5;
-  --secondary-foreground: #18181b;
-  --muted: #f4f4f5;
-  --muted-foreground: #71717a;
-  --accent: #f4f4f5;
-  --accent-foreground: #18181b;
-  --destructive: #ef4444;
+  --secondary: #eef1f7;
+  --secondary-foreground: #25324a;
+  --muted: #eef1f7;
+  --muted-foreground: #5d687d;
+  --accent: #e7ecfb;
+  --accent-foreground: #334c9b;
+  --destructive: #c83e55;
   --destructive-foreground: #fafafa;
-  --border: #e4e4e7;
-  --input: #e4e4e7;
-  --ring: #2563eb;
-  --brand: #2563eb;
-  --brand-foreground: #1d4ed8;
+  --border: #dce2ee;
+  --input: #cbd4e3;
+  --ring: #637ee8;
+  --brand: #526bd6;
+  --brand-foreground: #4057bb;
+  --success: #16856c;
+  --success-soft: #e6f6f0;
+  --warning: #a66b18;
+  --warning-soft: #fff4df;
+  --info: #3e61b8;
+  --info-soft: #eaf0ff;
 }
 
 .dark {
   color-scheme: dark;
-  --background: #09090b;
-  --foreground: #fafafa;
-  --card: #09090b;
-  --card-foreground: #fafafa;
-  --popover: #09090b;
-  --popover-foreground: #fafafa;
-  --primary: #fafafa;
-  --primary-foreground: #18181b;
-  --secondary: #27272a;
-  --secondary-foreground: #fafafa;
-  --muted: #27272a;
-  --muted-foreground: #a1a1aa;
-  --accent: #27272a;
-  --accent-foreground: #fafafa;
-  --destructive: #7f1d1d;
+  --background: #101521;
+  --foreground: #edf1fb;
+  --card: #171e2d;
+  --card-foreground: #edf1fb;
+  --popover: #1b2435;
+  --popover-foreground: #edf1fb;
+  --primary: #e7ecfb;
+  --primary-foreground: #172033;
+  --secondary: #222c40;
+  --secondary-foreground: #edf1fb;
+  --muted: #202a3d;
+  --muted-foreground: #aab6ca;
+  --accent: #29375e;
+  --accent-foreground: #d9e1ff;
+  --destructive: #f07a8d;
   --destructive-foreground: #fafafa;
-  --border: #27272a;
-  --input: #27272a;
-  --ring: #3b82f6;
-  --brand: #3b82f6;
-  --brand-foreground: #93c5fd;
+  --border: #2d3a52;
+  --input: #3a4963;
+  --ring: #8ea4ff;
+  --brand: #8ea4ff;
+  --brand-foreground: #b9c7ff;
+  --success: #5ed0b1;
+  --success-soft: #173c3a;
+  --warning: #f2bd61;
+  --warning-soft: #44351e;
+  --info: #9db3ff;
+  --info-soft: #202e58;
 }
 
 html {
@@ -96,6 +108,19 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+button,
+a,
+select,
+input,
+textarea {
+  transition: color 0.16s ease, background-color 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+:where(button, a, select, input, textarea):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
 .workspace-stack {
   display: grid;
   gap: 1.5rem;
@@ -107,7 +132,7 @@ body {
   background: var(--card);
   color: var(--card-foreground);
   padding: 1.5rem;
-  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  box-shadow: 0 10px 30px rgb(34 52 84 / 0.06);
 }
 
 .section-title {
@@ -181,6 +206,30 @@ body {
 
 .data-row-interactive:hover {
   background: color-mix(in oklab, var(--muted) 45%, transparent);
+}
+
+.status-success {
+  border-color: color-mix(in oklab, var(--success) 35%, var(--border));
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.status-warning {
+  border-color: color-mix(in oklab, var(--warning) 35%, var(--border));
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.status-info {
+  border-color: color-mix(in oklab, var(--info) 30%, var(--border));
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.status-danger {
+  border-color: color-mix(in oklab, var(--destructive) 35%, var(--border));
+  background: color-mix(in oklab, var(--destructive) 10%, var(--card));
+  color: var(--destructive);
 }
 
 .density-compact .data-row {
@@ -408,7 +457,7 @@ body {
 }
 
 .nav-link-active {
-  border-left: 2px solid var(--brand);
+  border-left: 3px solid var(--brand);
   background: color-mix(in oklab, var(--brand) 10%, transparent);
   color: var(--brand-foreground);
 }
@@ -426,6 +475,20 @@ body {
     var(--card) 45%,
     color-mix(in oklab, var(--muted) 60%, var(--card)) 100%
   );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }
 
 .copy-field {

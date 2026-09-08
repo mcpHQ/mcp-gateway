@@ -19,7 +19,8 @@ open http://localhost:8080
 
 ## Architecture notes
 
-- MCP Gateway is a single Go binary with an embedded web UI and an embedded **SQLite** database. The chart therefore deploys **one replica** with a `Recreate` update strategy and a `ReadWriteOnce` PersistentVolumeClaim mounted at `/data`. Do not scale it horizontally unless your storage provides reliable SQLite file locking across pods.
+- MCP Gateway is a single Go binary with an embedded web UI and an embedded **SQLite** database. The chart therefore deploys **one replica** with a `Recreate` update strategy and a `ReadWriteOnce` PersistentVolumeClaim mounted at `/data`. Do not scale it horizontally unless your storage provides reliable SQLite file locking across pods. See [`docs/SCALABILITY.md`](../../docs/SCALABILITY.md) for why, and for the planned redesign.
+- The chart includes opt-in `autoscaling` (HorizontalPodAutoscaler) and `podDisruptionBudget` scaffolding for the gateway Deployment. Both are disabled by default and must **not** be enabled while running on the embedded SQLite backend — they exist for the eventual multi-replica topology described in `docs/SCALABILITY.md`.
 - The container runs as a non-root user with a read-only root filesystem; only the data volume is writable.
 - Health probes use the built-in `GET /healthz` endpoint.
 - The default published image is minimal Alpine, so **stdio MCP servers** (e.g. `npx @modelcontextprotocol/server-filesystem`) are not available in it. Build a custom image with the runtimes you need if you want stdio upstreams in-cluster.
@@ -79,7 +80,13 @@ ingress:
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `replicaCount` | `1` | Number of replicas. Keep at 1 (SQLite). |
+| `replicaCount` | `1` | Number of replicas. Keep at 1 (SQLite); ignored when `autoscaling.enabled` |
+| `autoscaling.enabled` | `false` | Enable a HorizontalPodAutoscaler (unsafe with embedded SQLite, see above) |
+| `autoscaling.minReplicas` | `1` | Minimum replicas when autoscaling is enabled |
+| `autoscaling.maxReplicas` | `5` | Maximum replicas when autoscaling is enabled |
+| `autoscaling.targetCPUUtilizationPercentage` | `80` | Target average CPU utilization |
+| `podDisruptionBudget.enabled` | `false` | Create a PodDisruptionBudget for the gateway |
+| `podDisruptionBudget.maxUnavailable` | `1` | Max unavailable pods (ignored if `minAvailable` is set) |
 | `image.repository` | `ghcr.io/mcphq/mcp-gateway` | Image repository |
 | `image.tag` | `""` (chart `appVersion`) | Image tag |
 | `image.pullPolicy` | `IfNotPresent` | Image pull policy |

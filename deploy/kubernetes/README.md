@@ -7,7 +7,7 @@ Plain manifests for deploying [MCP Gateway](https://github.com/mcpHQ/mcp-gateway
 - `mcp-gateway` namespace
 - Secret with the initial admin password and JWT signing secret
 - 1Gi `ReadWriteOnce` PersistentVolumeClaim for the SQLite database (`/data`)
-- Single-replica Deployment (SQLite requires exclusive file access) with `/healthz` probes, non-root user, and read-only root filesystem
+- Single-replica Deployment (SQLite requires exclusive file access) with `/healthz` probes, non-root user, and read-only root filesystem — see [`docs/SCALABILITY.md`](../../docs/SCALABILITY.md) for why this can't be scaled horizontally yet and the plan to change that
 - ClusterIP Service on port 8080
 - Optional Ingress (disabled by default)
 

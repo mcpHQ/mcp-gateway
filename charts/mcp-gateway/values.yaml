@@ -3,6 +3,9 @@
 # MCP Gateway uses an embedded SQLite database, so it must run as a single
 # replica against a ReadWriteOnce volume. Do not increase this unless your
 # storage provides reliable SQLite file locking across pods.
+#
+# See ../../docs/SCALABILITY.md for the plan to remove this restriction.
+# Ignored when autoscaling.enabled is true.
 replicaCount: 1
 
 image:
@@ -106,6 +109,28 @@ resources: {}
   # requests:
   #   cpu: 100m
   #   memory: 128Mi
+
+# Horizontal Pod Autoscaler for the gateway Deployment.
+#
+# WARNING: Do not enable this while the gateway is backed by the embedded
+# SQLite database (the default). Scaling beyond one replica with SQLite
+# causes concurrent writers to race for the same database file and each pod
+# to hold a divergent in-memory tool/usage cache. Only enable this once the
+# gateway is configured against an external, network-accessible database and
+# distributed rate-limit/tool-cache state, per docs/SCALABILITY.md.
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: ""
+
+# PodDisruptionBudget for the gateway Deployment. Only meaningful once more
+# than one replica can safely run (see autoscaling above).
+podDisruptionBudget:
+  enabled: false
+  minAvailable: ""
+  maxUnavailable: 1
 
 livenessProbe:
   httpGet:
